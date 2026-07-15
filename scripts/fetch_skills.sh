@@ -34,21 +34,28 @@ fetch() {  # repo  cap  license
   echo "[fetch] $repo: added $added skills (license: $license)"
 }
 
-declare -A ALL=(
-  [anthropics]="anthropics/skills 0 per-skill(frontmatter)"
-  [nvidia]="nvidia/skills 30 Apache-2.0"
-  [lambdatest]="LambdaTest/agent-skills 12 MIT"
-  [trailofbits]="trailofbits/skills 12 CC-BY-SA-4.0"
-)
+# source lookup as a case statement (not `declare -A`): macOS ships bash 3.2, which has no
+# associative arrays
+SOURCES="anthropics nvidia lambdatest trailofbits"
+lookup() {  # source -> "repo cap license" ("" if unknown)
+  case "$1" in
+    anthropics)  echo "anthropics/skills 0 per-skill(frontmatter)" ;;
+    nvidia)      echo "nvidia/skills 30 Apache-2.0" ;;
+    lambdatest)  echo "LambdaTest/agent-skills 12 MIT" ;;
+    trailofbits) echo "trailofbits/skills 12 CC-BY-SA-4.0" ;;
+  esac
+}
 
 targets=("$@")
-[ "${#targets[@]}" -eq 0 ] && { echo "usage: $0 all | <source> [<source> …]  (sources: ${!ALL[*]})"; exit 1; }
-[ "${targets[0]}" = "all" ] && targets=("${!ALL[@]}")
+[ "${#targets[@]}" -eq 0 ] && { echo "usage: $0 all | <source> [<source> …]  (sources: $SOURCES)"; exit 1; }
+# shellcheck disable=SC2206
+[ "${targets[0]}" = "all" ] && targets=($SOURCES)
 
 for t in "${targets[@]}"; do
-  [ -z "${ALL[$t]:-}" ] && { echo "unknown source '$t' (have: ${!ALL[*]})"; exit 1; }
+  spec="$(lookup "$t")"
+  [ -z "$spec" ] && { echo "unknown source '$t' (have: $SOURCES)"; exit 1; }
   # shellcheck disable=SC2086
-  fetch ${ALL[$t]}
+  fetch $spec
 done
 
 echo "[fetch] $(find "$SKILLS" -name SKILL.md | wc -l | tr -d ' ') skills now in $SKILLS"

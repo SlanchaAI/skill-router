@@ -459,19 +459,19 @@ length penalty, execution-based code check + sandbox, task drafting, continuous-
 token-ledger thread-safety), and the router (retrieval, thresholds, `nearest`):
 
 ```bash
-docker run --rm -v $(pwd):/app -w /app skill_router-mcp python -m pytest tests -q
+docker run --rm -v $(pwd):/app -w /app skill-router-mcp python -m pytest tests -q
 ```
 
 One **opt-in integration test** exercises the real jailbreak classifier and auto-skips unless the
 model is present — to run it, build an image with the guard deps and set the model:
 
 ```bash
-docker build -t skill_router-guard - <<'DOCKER'
-FROM skill_router-mcp
+docker build -t skill-router-guard - <<'DOCKER'
+FROM skill-router-mcp
 RUN pip install --no-cache-dir "transformers>=4.44" torch --index-url https://download.pytorch.org/whl/cpu
 DOCKER
 docker run --rm -e SKILL_GUARD_MODEL=llm-semantic-router/mmbert32k-jailbreak-detector-merged \
-  -e HF_HOME=/app/.hf_cache -v $(pwd):/app -w /app skill_router-guard python -m pytest tests -q
+  -e HF_HOME=/app/.hf_cache -v $(pwd):/app -w /app skill-router-guard python -m pytest tests -q
 ```
 
 ## What's next

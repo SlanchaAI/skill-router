@@ -149,6 +149,12 @@
   .fine li { margin: .15rem 0; }
   .fine code { font-family: var(--mono); font-size: .92em; background: var(--panel2); padding: .05rem .3rem; border-radius: 3px; }
 
+  .chip.unlabeled { color: var(--muted); background: var(--panel2); border: 1px dashed var(--line); }
+  .skipnote { font-family: var(--mono); font-size: .72rem; color: var(--muted); margin-top: .5rem; }
+  #picker-list label { display: flex; gap: .55rem; align-items: baseline; font-size: .8rem; padding: .15rem 0; }
+  #picker-list .name { font-family: var(--mono); }
+  #recompute { cursor: pointer; padding: .3rem .8rem; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel2); color: var(--ink); font: 600 .78rem var(--sans); }
   button:focus-visible, .run:focus-visible, input:focus-visible { outline: 2px solid var(--fork); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -198,6 +204,13 @@
 
   <section>
     <h2>Runs</h2>
+    <div class="card" id="picker" hidden style="margin-bottom:.8rem">
+      <p class="sub" style="margin-bottom:.5rem">Runs on disk. Pick which feed the trie;
+        unlabeled runs (no test output) can't carry a pass/fail signal.</p>
+      <div id="picker-list"></div>
+      <p style="margin:.6rem 0 0"><button id="recompute">Recompute trie</button>
+        <span class="counts" id="picker-msg"></span></p>
+    </div>
     <div class="runhead">
       <p class="sub" id="runsub"></p>
       <label class="rawtoggle"><input type="checkbox" id="rawtoggle"> raw commands</label>
@@ -423,21 +436,59 @@ function renderRuns(d) {
 $("#rawtoggle").addEventListener("change", e => { showRaw = e.target.checked; renderRuns(DATA); relight(); });
 
 /* ---------------- load ---------------- */
+const fail = (sel, e) => { $(sel).innerHTML = `<div class="card unavailable">Unavailable: ${esc(e.message)}</div>`; };
+let carnDir = "?";
+
+function skipNote(d) {
+  if (!d.skipped || !d.skipped.length) return "";
+  return `<div class="skipnote">skipped: ` +
+    d.skipped.map(s => `${esc(s.name)} (${esc(s.reason)})`).join(" · ") + `</div>`;
+}
+
+async function refreshTrie(names) {
+  const qs = names ? "?runs=" + encodeURIComponent(names.join(",")) : "";
+  const d = await j("/api/carn/trie" + qs);
+  DATA = d; pinnedRun = null;
+  renderSummary(d); renderForks(d); renderTree(d); renderRuns(d);
+  $("#provenance").innerHTML =
+    `carn checkout: <code>${esc(carnDir)}</code> · trie computed live by <code>scripts/trie_forks.py</code>` +
+    (d.demo ? ` · <b>demo data</b>: no labeled runs/ on disk yet, showing the fix-git exemplar (same runs as <code>--self-test</code>)`
+            : ` · ${d.runs.length} runs from <code>runs/</code> · labels: pytest summary in each run's <code>test_output.txt</code>`) +
+    skipNote(d);
+  return d;
+}
+
+async function renderPicker(current) {
+  const disk = await j("/api/carn/runs");
+  if (!disk.length) return;
+  const inTrie = new Set(current.runs.map(r => r.name));
+  $("#picker").hidden = false;
+  $("#picker-list").innerHTML = disk.map(r => {
+    const broken = r.n_steps === null;
+    const chip = r.passed === true ? `<span class="chip pass">✓ PASS</span>`
+      : r.passed === false ? `<span class="chip fail">✕ FAIL</span>`
+      : `<span class="chip unlabeled">${broken ? "unreadable" : "unlabeled"}</span>`;
+    return `<label><input type="checkbox" value="${esc(r.name)}"
+      ${inTrie.has(r.name) ? "checked" : ""} ${r.passed === null ? "disabled" : ""}>
+      <span class="name">${esc(r.name)}</span> ${chip}
+      <span class="counts">${broken ? "trajectory unreadable" : r.n_steps + " steps"}</span></label>`;
+  }).join("");
+  $("#recompute").onclick = async () => {
+    const sel = [...document.querySelectorAll("#picker-list input:checked")].map(i => i.value);
+    $("#picker-msg").textContent = "computing…";
+    try { const d = await refreshTrie(sel); $("#picker-msg").textContent = ""; renderPicker(d); }
+    catch (e) { $("#picker-msg").textContent = "failed: " + e.message; }
+  };
+}
+
 (async () => {
-  const fail = (sel, e) => { $(sel).innerHTML = `<div class="card unavailable">Unavailable: ${esc(e.message)}</div>`; };
-  let carnDir = "?";
   try {
     const o = await j("/api/carn/overview"); carnDir = o.carn_dir; renderStory(o);
   } catch (e) { fail("#story", e); }
   try { renderGraphs(await j("/api/carn/graphs")); } catch (e) { fail("#graphs", e); }
   try {
-    const d = await j("/api/carn/trie");
-    DATA = d;
-    renderSummary(d); renderForks(d); renderTree(d); renderRuns(d);
-    $("#provenance").innerHTML =
-      `carn checkout: <code>${esc(carnDir)}</code> · trie computed live by <code>scripts/trie_forks.py</code>` +
-      (d.demo ? ` · <b>demo data</b>: no runs/ on disk yet, showing the fix-git exemplar (same runs as <code>--self-test</code>)`
-              : ` · ${d.runs.length} runs from <code>runs/</code> · labels: pytest summary in each run's <code>test_output.txt</code>`);
+    const d = await refreshTrie(null);
+    renderPicker(d).catch(() => {});  // picker is optional; the trie already rendered
   } catch (e) { fail("#forks", e); $("#provenance").textContent = "trie unavailable"; }
 })();
 </script>

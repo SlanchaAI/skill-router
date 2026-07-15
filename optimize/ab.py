@@ -272,7 +272,7 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
     if not wins:
         log("[ab] champion holds — nothing to promote.")
     elif promote_now and promotable:
-        log("[ab] --promote: " + promote(skill, challenger))
+        log("[ab] --promote: " + promote(skill, challenger, evidence))
     elif promotable:
         p = save_pending(skill, summary)
         log(f"[ab] pending approval written to {p} — review + promote at http://localhost:8080")

@@ -26,3 +26,29 @@ def test_route_json_matches_runtime_schema(tmp_path, capsys, monkeypatch):
     assert code == 0
     assert payload["match"] == "pdf" and payload["skill_body"] == "PDF body"
     assert len(payload["revision"]) == 64
+
+
+def test_improve_is_first_class_cli_workflow(monkeypatch):
+    from optimize import ab
+    called = []
+    monkeypatch.setattr(ab, "run_ab", lambda skill, **kwargs: called.append((skill, kwargs)) or {})
+    assert main(["improve", "pdf", "--budget", "12"]) == 0
+    assert called == [("pdf", {"budget": 12})]
+
+
+def test_review_prints_behavioral_gate(tmp_path, monkeypatch, capsys):
+    from optimize import promote as promotion
+    monkeypatch.setattr(promotion, "PENDING_DIR", tmp_path)
+    promotion.save_pending("pdf", {"skill": "pdf", "gate": {"promotable": False, "blocked": ["regression"]},
+                                   "evidence_paths": {"json": "evidence.json"}})
+    assert main(["review", "pdf", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["gate"]["promotable"] is False
+    assert payload["evidence_paths"]["json"] == "evidence.json"
+
+
+def test_promote_cli_invokes_explicit_promotion(monkeypatch, capsys):
+    from optimize import promote as promotion
+    monkeypatch.setattr(promotion, "promote", lambda skill: f"promoted {skill}")
+    assert main(["promote", "pdf"]) == 0
+    assert "promoted pdf" in capsys.readouterr().out

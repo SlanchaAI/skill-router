@@ -75,6 +75,17 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
 
+    improve = commands.add_parser("improve", help="mine, propose, and behaviorally gate a challenger")
+    improve.add_argument("skill")
+    improve.add_argument("--budget", type=int, default=60)
+
+    review = commands.add_parser("review", help="inspect a quarantined challenger and its evidence")
+    review.add_argument("skill")
+    review.add_argument("--json", action="store_true")
+
+    promote = commands.add_parser("promote", help="explicitly promote a challenger that passed its gate")
+    promote.add_argument("skill")
+
     doctor = commands.add_parser("doctor", help="report routing configuration without changing it")
     doctor.add_argument("--root", action="append", default=[])
     doctor.add_argument("--json", action="store_true")
@@ -100,6 +111,37 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         from .server import serve
         serve(stdio=not args.http, host=args.host, port=args.port, roots=_roots(args.root))
+        return 0
+    if args.command == "improve":
+        try:
+            from optimize.ab import run_ab
+        except ImportError as exc:
+            raise SystemExit("improvement dependencies missing; install skill-router[optimizer]") from exc
+        summary = run_ab(args.skill, budget=args.budget)
+        if summary.get("evidence_paths"):
+            print(summary["evidence_paths"]["markdown"])
+        return 0
+    if args.command == "review":
+        from optimize.promote import load_pending
+        pending = load_pending(args.skill)
+        if not pending:
+            raise SystemExit(f"no pending challenger for '{args.skill}'")
+        payload = {"skill": args.skill, "gate": pending.get("gate", {}),
+                   "changed_components": pending.get("changed_components", []),
+                   "evidence_paths": pending.get("evidence_paths", {})}
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            state = "PASS" if payload["gate"].get("promotable") else "BLOCKED"
+            print(f"{args.skill}: {state}")
+            for reason in payload["gate"].get("blocked", []):
+                print(f"- {reason}")
+            if payload["evidence_paths"].get("markdown"):
+                print(payload["evidence_paths"]["markdown"])
+        return 0
+    if args.command == "promote":
+        from optimize.promote import promote
+        print(promote(args.skill))
         return 0
     roots = _roots(args.root)
     skills = load_skills(roots=roots)

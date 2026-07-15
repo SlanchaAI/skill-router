@@ -157,6 +157,8 @@ def trie(runs: str = ""):
     tf = _tf()
     names = [r for r in runs.split(",") if r] or \
         [r["name"] for r in _list_runs() if r["n_steps"] is not None]
+    if len(names) > 200:
+        raise HTTPException(400, f"too many runs ({len(names)}); cap is 200")
     loaded, skipped, demo = [], [], False
     for name in names:
         d = _run_dir(name)

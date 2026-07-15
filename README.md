@@ -1,7 +1,7 @@
 # Ingot
 
 <p align="center">
-  <img src="docs/ingot.png" alt="Ingot, the mascot, handing skills out to AI agents" width="720">
+  <img src="docs/ingot.jpg" alt="Ingot, the mascot, handing skills out to AI agents" width="720">
 </p>
 
 **Ingot** is a self-improving [Agent Skills](https://github.com/anthropics/skills) library. An **MCP server**

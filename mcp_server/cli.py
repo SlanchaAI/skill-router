@@ -86,6 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
     promote = commands.add_parser("promote", help="explicitly promote a challenger that passed its gate")
     promote.add_argument("skill")
 
+    evaluate = commands.add_parser("eval", help="run held-out routing cases")
+    evaluate.add_argument("suite")
+    evaluate.add_argument("--root", action="append", default=[])
+    evaluate.add_argument("--min-score", type=float, default=float(os.environ.get("MIN_SCORE", "0.65")))
+    evaluate.add_argument("--json", action="store_true")
+
     doctor = commands.add_parser("doctor", help="report routing configuration without changing it")
     doctor.add_argument("--root", action="append", default=[])
     doctor.add_argument("--json", action="store_true")
@@ -143,12 +149,47 @@ def main(argv: list[str] | None = None) -> int:
         from optimize.promote import promote
         print(promote(args.skill))
         return 0
-    roots = _roots(args.root)
-    skills = load_skills(roots=roots)
-    payload = {"ok": True, "roots": [str(root) for root in roots], "skills": len(skills),
-               "default_transport": "stdio", "model_facing_tools": ["route_and_load"]}
-    _print(payload, args.json)
-    return 0
+    if args.command == "eval":
+        from .routing_eval import evaluate_cases, load_cases
+        result = evaluate_cases(Router(load_skills(roots=_roots(args.root))),
+                                load_cases(Path(args.suite)), min_score=args.min_score)
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"top1={result['top1']:.3f} recall@3={result['recall_at_3']:.3f} "
+                  f"no-route={result['no_route_precision']:.3f} failures={len(result['failures'])}")
+        return 0 if not result["failures"] else 1
+    if args.command == "doctor":
+        roots = _roots(args.root)
+        unavailable = [str(root) for root in roots if not root.is_dir()]
+        native = {}
+        for harness, directory in {
+            "claude": Path.home() / ".claude" / "skills",
+            "codex": Path.home() / ".codex" / "skills",
+        }.items():
+            native[harness] = sum(1 for path in directory.glob("*/SKILL.md")
+                                  if path.parent.name != "skill-router")
+        issues = [f"unavailable root: {root}" for root in unavailable]
+        issues.extend(f"{count} non-bootstrap native {harness} skill(s) remain"
+                      for harness, count in native.items() if count)
+        skills = load_skills(roots=roots) if not unavailable else []
+        payload = {
+            "ok": not issues,
+            "roots": [str(root) for root in roots],
+            "skills": len(skills),
+            "native_catalogs": native,
+            "default_transport": "stdio",
+            "model_facing_tools": ["route_and_load"],
+            "issues": issues,
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print("ok" if payload["ok"] else "configuration needs attention")
+            for issue in issues:
+                print(f"- {issue}")
+        return 0 if payload["ok"] else 1
+    raise AssertionError(f"unhandled command: {args.command}")
 
 
 if __name__ == "__main__":

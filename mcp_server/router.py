@@ -5,9 +5,9 @@ Model is `EMBED_MODEL` (default bge-small — fast + tiny). Any fastembed model 
 `BAAI/bge-large-en-v1.5` (1024-dim, more accurate) at ~10x the per-query and index-build cost on CPU.
 A stronger model like Qwen3-Embedding-0.6B belongs on the GPU/vLLM path, not this portable CPU demo."""
 from __future__ import annotations
-import fnmatch
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 from fastembed import TextEmbedding
@@ -79,8 +79,8 @@ class Router:
             patterns = meta.get("path_patterns", [])
             if "project" not in scopes or not patterns:
                 return False
-            normalized = str(os.path.realpath(os.path.expanduser(cwd)))
-            if not any(fnmatch.fnmatch(normalized, pattern) for pattern in patterns):
+            project = Path(cwd).expanduser().resolve()
+            if not project.is_dir() or not any(any(project.glob(pattern)) for pattern in patterns):
                 return False
         return True
 
@@ -104,12 +104,19 @@ class Router:
             ((skill, float(self._mat[index_by_name[skill.name]] @ q)) for skill in eligible),
             key=lambda pair: (-pair[1], -int(pair[0].metadata.get("priority", 50)), pair[0].name),
         )
-        top, score = ranked[0]
+        conflict_free = []
+        for candidate in ranked:
+            skill = candidate[0]
+            if any(skill.name in set(selected.metadata.get("conflicts", [])) or
+                   selected.name in set(skill.metadata.get("conflicts", []))
+                   for selected, _ in conflict_free):
+                continue
+            conflict_free.append(candidate)
+        top, score = conflict_free[0]
         alternatives = [
             {"name": skill.name, "score": round(candidate_score, 3),
              "reason": f"compatible alternative; cosine {candidate_score:.3f}"}
-            for skill, candidate_score in ranked[1:3]
-            if skill.name not in set(top.metadata.get("conflicts", []))
+            for skill, candidate_score in conflict_free[1:3]
         ]
         if score < min_score:
             return {**empty, "score": round(score, 3),

@@ -83,11 +83,12 @@ def test_explicit_roots_override_environment(tmp_path, monkeypatch):
     assert configured_roots([explicit]) == [explicit.resolve()]
 
 
-def test_load_skills_rejects_duplicate_identity_across_roots(tmp_path):
+def test_load_skills_uses_declared_root_precedence_with_warning(tmp_path):
     a, b = tmp_path / "a", tmp_path / "b"
-    _skill(a); _skill(b, dirname="other", name="sample")
-    with pytest.raises(ValueError, match="duplicate skill 'sample'"):
-        load_skills(roots=[a, b])
+    _skill(a, body="first"); _skill(b, dirname="other", name="sample", body="second")
+    with pytest.warns(UserWarning, match="duplicate skill 'sample'"):
+        skills = load_skills(roots=[a, b])
+    assert len(skills) == 1 and skills[0].body == "first"
 
 
 def test_skill_revision_changes_with_routing_content(tmp_path):
@@ -115,6 +116,12 @@ def test_router_metadata_defaults_and_namespaced_overrides(tmp_path):
     assert by_name["codex-only"].metadata["harnesses"] == ["codex"]
     assert by_name["codex-only"].metadata["trust"] == "reviewed"
     assert by_name["codex-only"].metadata["priority"] == 90
+
+
+def test_router_metadata_rejects_scalar_for_list_field(tmp_path):
+    _skill(tmp_path, extra="metadata:\n  skill-router:\n    harnesses: codex\n")
+    with pytest.raises(ValueError, match="harnesses.*list"):
+        load_skills(tmp_path)
 
 
 def test_harness_variant_replaces_only_body(tmp_path):

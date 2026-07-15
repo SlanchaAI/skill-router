@@ -51,6 +51,8 @@ def build_evidence(summary: dict, champion_revision: str, challenger_revision: s
         "dataset": summary["dataset"],
         "harness": summary.get("harness", "unknown"),
         "model": summary.get("model", "unknown"),
+        "split": summary.get("split", {"kind": "unknown", "leakage": True}),
+        "routing": summary.get("routing"),
         "champion": {"revision": champion_revision, "mean": champion["mean"],
                      "scores": champion["scores"], "tokens": champion["tokens"]},
         "challenger": {"revision": challenger_revision, "mean": challenger["mean"],
@@ -75,6 +77,7 @@ def render_markdown(evidence: dict) -> str:
         f"**Champion revision:** `{champion['revision']}`",
         f"**Challenger revision:** `{challenger['revision']}`",
         f"**Dataset:** `{evidence['dataset']}`",
+        f"**Split:** `{evidence['split']['kind']}` (leakage: {str(evidence['split']['leakage']).lower()})",
         "",
         "## Outcome",
         "",
@@ -85,7 +88,7 @@ def render_markdown(evidence: dict) -> str:
         "",
         "## Cases",
         "",
-        "| Case | Champion | Challenger | Delta | First divergence |",
+        "| Case | Champion | Challenger | Delta | First structural divergence |",
         "|---:|---:|---:|---:|---|",
     ]
     for case in evidence["cases"]:
@@ -98,7 +101,7 @@ def render_markdown(evidence: dict) -> str:
 
 def write_evidence(evidence: dict, root: Path) -> tuple[Path, Path]:
     root.mkdir(parents=True, exist_ok=True)
-    json_path, md_path = root / "evidence.json", root / "BENCHMARK.md"
+    json_path, md_path = root / "evidence.json", root / "EVIDENCE.md"
     for path, content in ((json_path, json.dumps(evidence, indent=2) + "\n"),
                           (md_path, render_markdown(evidence))):
         temporary = path.with_suffix(path.suffix + ".tmp")

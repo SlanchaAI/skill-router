@@ -1,5 +1,4 @@
-"""Thin approval UI: kick off optimize runs, review champion-vs-challenger scores + diff, and
-approve promotion (writes SKILL.md + hot-reloads the MCP server). Deep traces live in Langfuse."""
+"""Approval UI for champion/challenger evidence and explicit, revisioned promotion."""
 import difflib
 import os
 import threading

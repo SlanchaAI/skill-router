@@ -3,6 +3,9 @@
 Everything here is gated on CARN_DIR (path to a local carn checkout). Unset -> every
 endpoint 404s and the index link stays hidden, so builds without carn are unaffected.
 No endpoint mutates anything: this is a viewer over carn's on-disk artifacts.
+
+Trust boundary: _tf() executes $CARN_DIR/scripts/trie_forks.py in-process, so CARN_DIR
+is operator configuration, never request input.
 """
 import importlib.util
 import json
@@ -14,7 +17,7 @@ from fastapi.responses import FileResponse
 
 router = APIRouter()
 
-_TF = None  # cached trie_forks module, loaded from CARN_DIR
+_TF = None  # (carn_dir, module) — cached only after a successful import
 
 
 def carn_enabled() -> bool:
@@ -31,12 +34,13 @@ def _carn() -> Path:
 def _tf():
     """Import carn's trie_forks.py by path — carn stays the single source of the mining logic."""
     global _TF
-    if _TF is None:
-        spec = importlib.util.spec_from_file_location(
-            "carn_trie_forks", _carn() / "scripts" / "trie_forks.py")
-        _TF = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_TF)
-    return _TF
+    d = _carn()
+    if _TF is None or _TF[0] != d:
+        spec = importlib.util.spec_from_file_location("carn_trie_forks", d / "scripts" / "trie_forks.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # raises before caching, so a broken import is retried
+        _TF = (d, mod)
+    return _TF[1]
 
 
 def _read_json(p: Path):
@@ -66,9 +70,36 @@ def graphs():
     out = []
     for p in sorted(d.glob("*_graph.json")):
         g = _read_json(p)
-        if g and isinstance(g.get("nodes"), list):
+        if isinstance(g, dict) and isinstance(g.get("nodes"), list):
             out.append({"file": p.name, **g})
     return out
+
+
+def _run_dir(name: str) -> Path:
+    """Resolve a client-supplied run name strictly inside CARN_DIR/runs/."""
+    root = (_carn() / "runs").resolve()
+    d = (root / name).resolve()
+    if not (d.is_relative_to(root) and d != root):
+        raise HTTPException(400, f"run outside runs/: {name}")
+    if not (d / "trajectory.json").is_file():
+        raise HTTPException(404, f"no trajectory.json in runs/{name}")
+    return d
+
+
+def _load_steps(d: Path) -> list:
+    traj = _read_json(d / "trajectory.json")
+    steps = traj.get("steps") if isinstance(traj, dict) else None
+    if not isinstance(steps, list):
+        raise ValueError("trajectory.json has no steps list")
+    return steps
+
+
+def _label(tf, d: Path):
+    """True/False from the pytest summary; None when the run has no readable test output."""
+    try:
+        return tf.label_from_tests(str(d))
+    except (OSError, ValueError):
+        return None
 
 
 def _list_runs() -> list[dict]:
@@ -81,12 +112,12 @@ def _list_runs() -> list[dict]:
         if len(d.relative_to(root).parts) > 3:
             continue
         try:
-            passed = tf.label_from_tests(str(d))
-        except (OSError, ValueError):
-            passed = None
-        steps = _read_json(traj) or {}
-        out.append({"name": str(d.relative_to(root)), "passed": passed,
-                    "n_steps": len(steps.get("steps", []))})
+            n_steps = len(_load_steps(d))
+        except ValueError:
+            n_steps = None  # unreadable trajectory: listed so it isn't silently hidden
+        out.append({"name": str(d.relative_to(root)),
+                    "passed": _label(tf, d) if n_steps is not None else None,
+                    "n_steps": n_steps})
     return out
 
 
@@ -95,12 +126,22 @@ def runs_endpoint():
     return _list_runs()
 
 
-def _ser(n):
-    return {"npass": n.npass, "nfail": n.nfail, "example": n.example, "ends": n.ends,
-            "children": {t: _ser(c) for t, c in n.children.items()}}
+def _ser(root_node):
+    """Iterative trie -> dict (a long single-chain run would blow the recursion limit)."""
+    out = {"npass": root_node.npass, "nfail": root_node.nfail,
+           "example": root_node.example, "ends": root_node.ends, "children": {}}
+    stack = [(root_node, out)]
+    while stack:
+        src, dst = stack.pop()
+        for tok, c in src.children.items():
+            cd = {"npass": c.npass, "nfail": c.nfail, "example": c.example,
+                  "ends": c.ends, "children": {}}
+            dst["children"][tok] = cd
+            stack.append((c, cd))
+    return out
 
 
-# the fix-git exemplar from trie_forks.py --self-test: shown when no run dirs exist yet,
+# the fix-git exemplar from trie_forks.py --self-test: shown when no labeled runs exist yet,
 # so the panel demonstrates the mechanics instead of rendering an empty page
 _EXEMPLAR = [
     ("fix-git-baseline", False, ["cd /app/repo", "git reflog", "git merge a82b384",
@@ -113,20 +154,28 @@ _EXEMPLAR = [
 
 @router.get("/api/carn/trie")
 def trie(runs: str = ""):
-    tf, root = _tf(), _carn() / "runs"
-    names = [r for r in runs.split(",") if r] or [r["name"] for r in _list_runs()]
-    loaded, demo = [], False
+    tf = _tf()
+    names = [r for r in runs.split(",") if r] or \
+        [r["name"] for r in _list_runs() if r["n_steps"] is not None]
+    loaded, skipped, demo = [], [], False
     for name in names:
-        d = (root / name).resolve()
-        if not d.is_relative_to(root.resolve()):
-            raise HTTPException(400, f"run outside runs/: {name}")
-        loaded.append(tf.load_run(str(d)))
-    if not loaded:
+        d = _run_dir(name)
+        try:
+            steps = _load_steps(d)
+        except ValueError as e:
+            skipped.append({"name": name, "reason": str(e)})
+            continue
+        passed = _label(tf, d)
+        if passed is None:
+            skipped.append({"name": name, "reason": "no test output (unlabeled)"})
+            continue
+        loaded.append((name, passed, tf.tokenize(steps)))
+    if not loaded and not names:
         demo = True
         loaded = [(n, p, tf.tokenize([{"command": c} for c in cmds]))
                   for n, p, cmds in _EXEMPLAR]
     root_node, total, nodes = tf.build(loaded)
-    return {"demo": demo,
+    return {"demo": demo, "skipped": skipped,
             "runs": [{"name": n, "passed": p, "tokens": [{"tok": t, "raw": r} for t, r in ts]}
                      for n, p, ts in loaded],
             "trie": _ser(root_node),

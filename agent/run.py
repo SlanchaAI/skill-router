@@ -59,7 +59,7 @@ def behavior_events(messages) -> list[dict]:
 
 
 async def run_task(agent, task: str, config: dict | None = None, include_behavior: bool = False):
-    """Run one task; returns (final answer, skills loaded via get_skill, token usage).
+    """Run one task; returns final answer, routed skill revisions, and token usage.
     Usage sums usage_metadata over every LLM call in the run — the full cost of solving the task."""
     result = await agent.ainvoke({"messages": [{"role": "user", "content": task}]}, config=config or {})
     messages = result["messages"]
@@ -126,7 +126,7 @@ async def main(task: str):
         print("        Set OPENROUTER_API_KEY in .env to run the deep agent.")
         return
 
-    # 2) Deep agent autonomously loads a skill via get_skill and solves. Traced to Langfuse if configured.
+    # 2) Deep agent routes once and solves. Traced to Langfuse if configured.
     agent = build_agent(await _connect())
     final, loaded, usage = await run_task(agent, task, config=langfuse_config(tags=["demo"]))
 

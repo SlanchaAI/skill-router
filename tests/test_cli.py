@@ -52,3 +52,28 @@ def test_promote_cli_invokes_explicit_promotion(monkeypatch, capsys):
     monkeypatch.setattr(promotion, "promote", lambda skill: f"promoted {skill}")
     assert main(["promote", "pdf"]) == 0
     assert "promoted pdf" in capsys.readouterr().out
+
+
+def test_eval_command_runs_committed_routing_cases(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SKILL_ROUTER_CACHE", str(tmp_path / "index.json"))
+    _write_skill(tmp_path)
+    suite = tmp_path / "routing.yaml"
+    suite.write_text("cases:\n  - task: merge two PDFs\n    expected: pdf\n")
+    assert main(["eval", str(suite), "--root", str(tmp_path), "--min-score", "0", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["top1"] == 1.0 and payload["failures"] == []
+
+
+def test_doctor_reports_native_catalog_remnants(tmp_path, monkeypatch, capsys):
+    home = tmp_path / "home"
+    native = home / ".codex" / "skills" / "old-skill"
+    native.mkdir(parents=True)
+    (native / "SKILL.md").write_text("---\nname: old-skill\ndescription: old\n---\nbody")
+    root = tmp_path / "library"
+    _write_skill(root)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SKILL_ROUTER_CACHE", str(tmp_path / "index.json"))
+    assert main(["doctor", "--root", str(root), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["native_catalogs"]["codex"] == 1

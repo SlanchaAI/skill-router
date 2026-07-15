@@ -104,3 +104,20 @@ def test_route_uses_priority_then_name_for_equal_scores():
     high = _skill("high", "Identical routing description.", priority=90)
     result = Router([low, high]).route("identical routing description", "codex", "/tmp", min_score=0.0)
     assert result["match"] == "high"
+
+
+def test_project_path_scope_matches_files_below_cwd(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("print('ok')")
+    router = Router([_skill("python", "Debug Python code.", scopes=["project"],
+                            path_patterns=["**/*.py"])])
+    result = router.route("debug python", "codex", str(tmp_path), min_score=0.0)
+    assert result["match"] == "python"
+
+
+def test_conflicting_skills_do_not_both_appear_in_ranked_result():
+    one = _skill("one", "Same routing text.", conflicts=["two"])
+    two = _skill("two", "Same routing text.", priority=40)
+    result = Router([one, two]).route("same routing text", "codex", "/tmp", min_score=0.0)
+    ranked = [result["match"], *[item["name"] for item in result["alternatives"]]]
+    assert not ({"one", "two"} <= set(ranked))

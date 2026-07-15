@@ -1,6 +1,6 @@
-"""Optimize a FULL skill and A/B it: GEPA evolves the skill's components (routing description, SKILL.md
-body, and any bundled files) into a challenger, then champion vs challenger run through the FULL deep
-agent (real MCP suggest_skills, variant get_skill) on the skill's eval task set. Each variant is a
+"""Optimize a full skill and A/B it: GEPA evolves its routing description and SKILL.md body into a
+challenger, then champion and challenger run through the full agent with a local `route_and_load`.
+Each variant is a
 Langfuse dataset run (side-by-side in the UI); the result is written to runs/pending/<skill>.json for
 approval in the UI (or promoted directly with --promote).
 
@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 from langchain_core.tools import tool
 
-from agent.run import _connect, build_agent, langfuse_config, run_task
+from agent.run import build_agent, langfuse_config, run_task
 from mcp_server.registry import SKILLS_DIR, load_skills, optimizable_components
 
 from . import usage as usage_ledger
@@ -48,7 +48,10 @@ def _description_shadows(skill: str, new_description: str) -> tuple[str, float]:
 
 
 def promotion_gate(skill: str, champ_scores: list[float], chall_scores: list[float],
-                   changed: list[str], challenger: dict) -> tuple[bool, list[str]]:
+                   changed: list[str], challenger: dict,
+                   routing_failures: list[str] | None = None,
+                   leakage: bool = False,
+                   routing_metrics: dict | None = None) -> tuple[bool, list[str]]:
     """A challenger that merely 'wins the mean' can be reward-hacking a small/noisy eval. Require a
     real margin, enough samples, no per-task catastrophic regression, and no routing-shadow from a
     rewritten description. Returns (promotable, reasons-it-was-blocked)."""
@@ -59,6 +62,8 @@ def promotion_gate(skill: str, champ_scores: list[float], chall_scores: list[flo
         reasons.append(f"margin {margin:+.2f} < required +{PROMOTE_MIN_MARGIN:.2f}")
     if len(chall_scores) < PROMOTE_MIN_SAMPLES:
         reasons.append(f"only {len(chall_scores)} held-out tasks (< {PROMOTE_MIN_SAMPLES})")
+    if leakage:
+        reasons.append("holdout reuses training tasks; add an explicit holdout before promotion")
     regressed = [i for i, (c, h) in enumerate(zip(champ_scores, chall_scores)) if c >= PASS and h < PASS]
     if regressed:
         reasons.append(f"catastrophic regression on {len(regressed)} task(s) the champion passed")
@@ -66,22 +71,38 @@ def promotion_gate(skill: str, champ_scores: list[float], chall_scores: list[flo
         shadowed, score = _description_shadows(skill, challenger["description"])
         if score >= COLLISION_SCORE:
             reasons.append(f"rewritten description shadows '{shadowed}' (cosine {score:.2f}) — routing hack")
+        if routing_failures:
+            reasons.append(f"routing regression on {len(routing_failures)} held-out task(s)")
+        if routing_metrics is None:
+            reasons.append("description changed without a routing suite")
+        else:
+            champion_route = routing_metrics["champion"]
+            challenger_route = routing_metrics["challenger"]
+            if challenger_route["recall_at_3"] < 0.95:
+                reasons.append(f"routing recall@3 {challenger_route['recall_at_3']:.3f} < 0.950")
+            if challenger_route["no_route_precision"] < 0.95:
+                reasons.append(f"no-route precision {challenger_route['no_route_precision']:.3f} < 0.950")
+            for metric in ("top1", "recall_at_3", "no_route_precision"):
+                if challenger_route[metric] < champion_route[metric]:
+                    reasons.append(f"routing {metric} regressed {champion_route[metric]:.3f} -> "
+                                   f"{challenger_route[metric]:.3f}")
+            parity = routing_metrics["parity"]
+            if parity["total"] and parity["rate"] < 1.0:
+                reasons.append(f"cross-harness parity {parity['rate']:.3f} < 1.000")
     return (not reasons), reasons
 
-# Eval agents get mutation tools stripped (see _variant_tools), so their instructions must not
-# mandate create_skill the way the production INSTRUCTIONS do — an instructed-but-missing tool
-# sends the model into tool-not-found retries and corrupts the rollout.
+# Eval agents receive the same single read-only route contract as production.
 EVAL_INSTRUCTIONS = """You are a deep agent with access to a read-only skill router over MCP.
 For every task, call `route_and_load` once with the full task, harness `codex`, current working
 directory, and available tools/MCPs. Follow `skill_body` when a match is returned. With no match,
 solve directly. Never request a skill catalog. Keep the final answer concise."""
 
 
-def load_tasks(skill: str, log=print) -> tuple[list[dict], list[dict]]:
-    """Return (train, holdout) task lists. GEPA optimizes on train; the A/B + promotion decision is
+def load_tasks(skill: str, log=print) -> tuple[list[dict], list[dict], dict]:
+    """Return train, holdout, and split metadata. GEPA optimizes on train; promotion uses holdout.
     judged on holdout — a leakage-clean split so a challenger has to *generalize*, not memorize.
-    A task set with only a flat `tasks:` list falls back to train==holdout (no split). If no task set
-    exists (e.g. a freshly created skill), the teacher auto-drafts one so the skill is optimizable."""
+    A flat `tasks:` list is marked leaky and cannot produce a promotable gate. If no task set exists,
+    the teacher drafts one; that draft must include a real holdout before promotion."""
     p = TASKS_DIR / f"{skill}.yaml"
     if not p.exists():
         from mcp_server.registry import SKILLS_DIR as _SD, read_components
@@ -90,11 +111,13 @@ def load_tasks(skill: str, log=print) -> tuple[list[dict], list[dict]]:
         draft_and_save(skill, comps["description"], comps["body"], TASKS_DIR, log=log)
     data = yaml.safe_load(p.read_text())
     train = data.get("train") or data.get("tasks") or []
+    explicit_holdout = bool(data.get("holdout"))
     holdout = data.get("holdout") or train
-    return train, holdout
+    split = {"kind": "holdout" if explicit_holdout else "none", "leakage": not explicit_holdout}
+    return train, holdout, split
 
 
-def _variant_tools(mcp_tools, skill: str, body: str, description: str):
+def _variant_tools(skill: str, body: str, description: str):
     """One read-only route tool backed by the variant description and body."""
     from mcp_server.router import Router
     skills = load_skills()
@@ -109,6 +132,35 @@ def _variant_tools(mcp_tools, skill: str, body: str, description: str):
         return variant_router.route(task, harness, cwd, available_tools, available_mcps)
 
     return [route_and_load]
+
+
+def _routing_failures(skill: str, challenger: dict, tasks: list[dict]) -> list[str]:
+    from mcp_server.router import Router
+    skills = load_skills()
+    variants = [replace(item, description=challenger["description"], body=challenger["body"])
+                if item.name == skill else item for item in skills]
+    router = Router(variants)
+    return [task["task"] for task in tasks
+            if router.route(task["task"], "codex", os.getcwd()).get("match") != skill]
+
+
+def _routing_metrics(skill: str, champion: dict, challenger: dict) -> dict | None:
+    data = yaml.safe_load((TASKS_DIR / f"{skill}.yaml").read_text()) or {}
+    cases = data.get("routing") or []
+    if not cases:
+        return None
+    from mcp_server.router import Router
+    from mcp_server.routing_eval import evaluate_cases, evaluate_parity
+    skills = load_skills()
+
+    def variant(components):
+        return Router([replace(item, description=components["description"], body=components["body"])
+                       if item.name == skill else item for item in skills])
+
+    champion_router, challenger_router = variant(champion), variant(challenger)
+    return {"champion": evaluate_cases(champion_router, cases),
+            "challenger": evaluate_cases(challenger_router, cases),
+            "parity": evaluate_parity(challenger_router, cases)}
 
 
 def _run_variant(dataset, variant: str, agent, tasks: list[dict]):
@@ -155,7 +207,7 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
     from langfuse import get_client
 
     usage_ledger.reset()
-    train, holdout = load_tasks(skill)  # GEPA optimizes on train; A/B + promotion judge on holdout
+    train, holdout, split = load_tasks(skill)
     skill_dir = SKILLS_DIR / skill
     if not (skill_dir / "SKILL.md").exists():
         raise SystemExit(f"No skill named '{skill}' in skills/.")
@@ -196,15 +248,13 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
         langfuse.create_dataset_item(dataset_name=ds_name, id=f"{skill}-holdout-{i}", input=t)
     dataset = langfuse.get_dataset(ds_name)
 
-    mcp_tools = asyncio.run(_connect())
     ts = int(time.time())
     results = {}
     for variant, comps in [("champion", champion), ("challenger", challenger)]:
         run_name = f"{variant}-{ts}"
         log(f"[ab] running variant '{run_name}' through the deep agent ({len(holdout)} held-out tasks)…")
-        # A/B serves the variant's description + body (what get_skill returns); bundled-file changes
-        # are reviewed in the diff, not executed here (the agent reads files from the on-disk champion).
-        agent = build_agent(_variant_tools(mcp_tools, skill, comps["body"], comps["description"]),
+        # A/B serves the variant description and body through the same one-call routing shape.
+        agent = build_agent(_variant_tools(skill, comps["body"], comps["description"]),
                             instructions=EVAL_INSTRUCTIONS)
         scores, usages, behaviors = _run_variant(dataset, run_name, agent, holdout)
         results[variant] = {
@@ -226,8 +276,12 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
 
     wins = results["challenger"]["mean"] > results["champion"]["mean"]
     changed = [k for k in champion if challenger.get(k, "").strip() != champion[k].strip()]
+    route_failures = _routing_failures(skill, challenger, holdout) if "description" in changed else []
+    route_metrics = _routing_metrics(skill, champion, challenger) if "description" in changed else None
     promotable, blocked = promotion_gate(skill, results["champion"]["scores"],
-                                         results["challenger"]["scores"], changed, challenger)
+                                         results["challenger"]["scores"], changed, challenger,
+                                         routing_failures=route_failures, leakage=split["leakage"],
+                                         routing_metrics=route_metrics)
     summary = {
         "skill": skill, "improved": wins, "created": ts,
         "gepa": {"seed_score": seed_score, "best_score": best_score, "budget": budget},
@@ -241,6 +295,9 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
         "harness": "codex",
         "model": os.environ.get("MODEL", "unknown"),
         "behavior": {variant: result["behavior"] for variant, result in results.items()},
+        "routing_failures": route_failures,
+        "routing": route_metrics,
+        "split": split,
     }
 
     c_tok, ch_tok = results["champion"]["tokens"], results["challenger"]["tokens"]

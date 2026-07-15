@@ -9,6 +9,7 @@ SUMMARY = {
     "dataset": "pdf-holdout",
     "harness": "codex",
     "model": "test-model",
+    "split": {"kind": "holdout", "leakage": False},
     "changed_components": ["body"],
     "gate": {"promotable": True, "blocked": []},
     "ab": {
@@ -50,11 +51,19 @@ def test_build_evidence_attributes_revisions_and_per_case_deltas():
     assert evidence["gate"]["promotable"] is True
 
 
-def test_write_evidence_emits_json_and_deterministic_benchmark(tmp_path):
+def test_write_evidence_emits_json_and_deterministic_report(tmp_path):
     evidence = build_evidence(SUMMARY, "champ-rev", "chall-rev")
     json_path, md_path = write_evidence(evidence, tmp_path)
     assert json.loads(json_path.read_text()) == evidence
     assert md_path.read_text() == render_markdown(evidence)
     text = md_path.read_text()
+    assert md_path.name == "EVIDENCE.md"
     assert "Behavioral Skill CI" in text and "0.250 → 0.750" in text
     assert "PASS" in text and "champ-rev" in text
+
+
+def test_evidence_marks_leaky_split_and_structural_divergence():
+    summary = {**SUMMARY, "split": {"kind": "none", "leakage": True}}
+    evidence = build_evidence(summary, "champ", "chall")
+    assert evidence["split"]["leakage"] is True
+    assert "structural" in render_markdown(evidence).lower()

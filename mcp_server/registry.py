@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import uuid
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -110,6 +111,11 @@ def _router_metadata(meta: dict) -> dict:
     for key in result:
         if key in extension:
             result[key] = extension[key]
+    list_fields = ("harnesses", "scopes", "path_patterns", "required_tools", "required_mcps",
+                   "platforms", "conflicts")
+    for key in list_fields:
+        if not isinstance(result[key], list) or not all(isinstance(item, str) for item in result[key]):
+            raise ValueError(f"metadata.skill-router.{key} must be a list of strings")
     try:
         result["priority"] = int(result["priority"])
     except (TypeError, ValueError):
@@ -137,7 +143,7 @@ def _revision(files: list[Path]) -> str:
 
 
 def load_skills(skills_dir: Path | None = None, *, roots: Iterable[str | Path] | None = None) -> list[Skill]:
-    """Load Agent Skills from one or more roots, rejecting ambiguous duplicate identities."""
+    """Load skills in declared root order; first duplicate identity wins with a visible warning."""
     selected_roots = configured_roots(roots if roots is not None else ([skills_dir] if skills_dir else None))
     skills: list[Skill] = []
     by_name: dict[str, Path] = {}
@@ -152,7 +158,9 @@ def load_skills(skills_dir: Path | None = None, *, roots: Iterable[str | Path] |
                 continue
             name = meta["name"]
             if name in by_name:
-                raise ValueError(f"duplicate skill '{name}' in {by_name[name]} and {sk}")
+                warnings.warn(f"duplicate skill '{name}': keeping {by_name[name]}, skipping {sk}",
+                              UserWarning, stacklevel=2)
+                continue
             variants: dict[str, str] = {}
             revision_files = [sk]
             variants_dir = skill_root / "variants"

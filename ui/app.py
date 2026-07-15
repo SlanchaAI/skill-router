@@ -117,7 +117,9 @@ def approve(skill: str):
     p = load_pending(_check(skill))
     if not p:
         raise HTTPException(404, f"no pending challenger for '{skill}'")
-    return {"result": promote(skill, p["challenger_components"])}
+    if p.get("gate", {}).get("promotable") is not True:
+        raise HTTPException(409, "Behavioral CI gate blocked this challenger")
+    return {"result": promote(skill)}
 
 
 @app.post("/api/reject/{skill}", dependencies=[Depends(same_origin)])

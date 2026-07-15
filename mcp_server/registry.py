@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -121,7 +122,7 @@ def _contained_file(skill_root: Path, path: Path) -> Path:
     try:
         resolved.relative_to(skill_root)
     except ValueError as exc:
-        raise ValueError(f"skill file escapes root: {path}") from exc
+        raise ValueError(f"skill file escapes skill root: {path}") from exc
     return resolved
 
 
@@ -215,12 +216,20 @@ def optimizable_components(skill_dir: Path) -> dict[str, str]:
 def write_components(skill_dir: Path, comps: dict[str, str]) -> None:
     """Write a full skill back, preserving existing frontmatter (name, license, source, …) and only
     updating the `description`, `body`, and each bundled `file:<relpath>` component."""
-    md_path = skill_dir / "SKILL.md"
+    skill_root = skill_dir.resolve()
+    md_path = _contained_file(skill_root, skill_dir / "SKILL.md")
     meta, _ = parse_skill(md_path.read_text(encoding="utf-8", errors="ignore"), skill_dir.name)
     meta["description"] = comps["description"]
-    write_skill_md(md_path, meta, comps["body"])
+    md_tmp = md_path.with_name(f".{md_path.name}.{uuid.uuid4().hex}.tmp")
+    write_skill_md(md_tmp, meta, comps["body"])
+    md_tmp.replace(md_path)
     for key, content in comps.items():
         if key.startswith("file:"):
-            p = skill_dir / key[len("file:"):]
+            relative = Path(key[len("file:"):])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"component escapes skill root: {relative}")
+            p = _contained_file(skill_root, skill_dir / relative)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
+            tmp = p.with_name(f".{p.name}.{uuid.uuid4().hex}.tmp")
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(p)

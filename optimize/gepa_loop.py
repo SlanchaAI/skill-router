@@ -32,7 +32,7 @@ bundled reference files) is provided below — follow it to complete the user's 
 
 {skill}"""
 
-from .judge import invoke_retry, judge  # noqa: E402
+from .judge import ZDR_PROVIDER, invoke_retry, judge  # noqa: E402
 from . import usage as usage_ledger  # noqa: E402
 
 
@@ -53,7 +53,8 @@ class SkillAdapter:
     propose_new_texts = None  # gepa probes this optional hook; None -> use its default reflection
 
     def __init__(self):
-        self._llm = ChatOpenAI(model=MODEL, base_url=BASE_URL, api_key=API_KEY, temperature=0)
+        self._llm = ChatOpenAI(model=MODEL, base_url=BASE_URL, api_key=API_KEY, temperature=0,
+                               extra_body=ZDR_PROVIDER)
 
     def _rollout(self, system, ex):
         msg = invoke_retry(self._llm, [("system", system), ("user", ex["task"])])
@@ -86,7 +87,9 @@ class SkillAdapter:
         diagnosis = ("Most common failure dimensions across these tasks: "
                      + (", ".join(f"{d} ({n})" for d, n in agg.most_common()) or "none")
                      + ". Make the smallest targeted change that fixes the dominant dimension; "
-                       "do not rewrite parts that already pass.")
+                       "do not rewrite parts that already pass. Deletions need evidence: do not "
+                       "remove guidance for operations these examples don't show failing — "
+                       "tighten or restructure it instead.")
         records = []
         for t in trajs:
             failed = failed_dimensions(t.get("dimensions", {}))
@@ -111,14 +114,21 @@ def run_gepa(seed: dict[str, str], tasks: list[dict],
     """Evolve the full skill (component dict) with GEPA.
     Returns (best_components, seed_score, best_score) on the task set."""
     import litellm
-    litellm.success_callback = [_track_reflection]  # reflection goes through litellm inside gepa
+    litellm.success_callback = [_track_reflection]  # reflection goes through litellm below
+
+    def reflection_lm(prompt) -> str:  # gepa's LanguageModel protocol: (str | messages) -> str
+        # our own litellm call instead of gepa's model-string plumbing, so the ZDR provider
+        # preference rides on every reflection request too
+        messages = prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}]
+        response = litellm.completion(model=f"openrouter/{GEPA_MODEL}", messages=messages,
+                                      extra_body=ZDR_PROVIDER)
+        return response.choices[0].message.content
 
     result = gepa.optimize(
         seed_candidate=seed,
         trainset=tasks,
         adapter=SkillAdapter(),
-        # litellm's native openrouter provider — reads OPENROUTER_API_KEY from env
-        reflection_lm=f"openrouter/{GEPA_MODEL}",
+        reflection_lm=reflection_lm,
         max_metric_calls=max_metric_calls,
         display_progress_bar=True,
         raise_on_exception=False,  # a transient provider error shouldn't kill a 30-min run

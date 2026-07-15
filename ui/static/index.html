@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>skill-router — optimize &amp; promote</title>
+<title>ingot — optimize &amp; promote</title>
 <style>
   :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
   body { max-width: 960px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
@@ -22,7 +22,7 @@
 </style>
 </head>
 <body>
-<h1>skill-router — optimize &amp; promote</h1>
+<h1>ingot — optimize &amp; promote</h1>
 <p class="muted">GEPA evolves a skill's SKILL.md, champion vs challenger are A/B-evaluated through the
 full agent, and approving here promotes the winner + hot-reloads the MCP server.
 Deep traces: <a id="lf" href="#" target="_blank">Langfuse</a>.</p>
@@ -101,6 +101,9 @@ async function showPending(skill) {
     (p.gate && !p.gate.promotable
       ? `<br><b style="color:#dc2626">⛔ promotion gate: ${esc(p.gate.blocked.join("; "))}</b> — review carefully before overriding.`
       : (p.gate ? `<br><span style="color:#16a34a">✓ passes promotion gate</span>` : "")) +
+    (p.gate && p.gate.warnings && p.gate.warnings.length
+      ? `<br><b style="color:#d97706">⚠ ${esc(p.gate.warnings.join("; "))}</b>`
+      : "") +
     `</span>`;
   $("#diff").textContent = p.diff || "(no textual diff)";
   $("#pending-msg").textContent = "";

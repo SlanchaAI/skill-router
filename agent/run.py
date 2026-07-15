@@ -17,6 +17,10 @@ MCP_URL = os.environ.get("MCP_URL", "http://mcp:8000/mcp")
 MODEL = os.environ.get("MODEL", "qwen/qwen3.6-27b")
 BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+# Zero data retention, hardcoded: every OpenRouter call routes only to endpoints that neither
+# retain prompts (zdr) nor collect user data (README: Privacy). Same literal in optimize/judge.py
+# (kept in sync by a test) so the optimizer doesn't import this module's heavy deps.
+ZDR_PROVIDER = {"provider": {"zdr": True, "data_collection": "deny"}}
 
 INSTRUCTIONS = """You are a deep agent with access to a skill router over MCP.
 For every task, first call `suggest_skills`, then decide from what it returns. Only ever call
@@ -39,7 +43,8 @@ def build_agent(tools, instructions: str = INSTRUCTIONS):
     from langchain_openai import ChatOpenAI
     from deepagents import create_deep_agent
 
-    model = ChatOpenAI(model=MODEL, base_url=BASE_URL, api_key=API_KEY, temperature=0)
+    model = ChatOpenAI(model=MODEL, base_url=BASE_URL, api_key=API_KEY, temperature=0,
+                       extra_body=ZDR_PROVIDER)
     return create_deep_agent(model=model, tools=tools, system_prompt=instructions)
 
 

@@ -11,6 +11,7 @@ import yaml
 from langchain_openai import ChatOpenAI
 
 from . import usage as usage_ledger
+from .judge import ZDR_PROVIDER
 
 MODEL = os.environ.get("GEPA_MODEL", "z-ai/glm-5.2")  # the teacher authors evals, like it authors skills
 BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
@@ -33,7 +34,8 @@ each covering a different operation/capability."""
 
 
 def _llm():
-    return ChatOpenAI(model=MODEL, base_url=BASE_URL, api_key=API_KEY, temperature=0.4)
+    return ChatOpenAI(model=MODEL, base_url=BASE_URL, api_key=API_KEY, temperature=0.4,
+                      extra_body=ZDR_PROVIDER)
 
 
 def draft_tasks(name: str, description: str, body: str, n: int = 8) -> dict:

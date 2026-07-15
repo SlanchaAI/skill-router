@@ -23,6 +23,9 @@ MODELS = [m.strip() for m in os.environ.get(
     "JUDGE_MODELS", os.environ.get("JUDGE_MODEL", "google/gemini-2.5-flash")).split(",") if m.strip()]
 BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+# Zero data retention, hardcoded on every OpenRouter call (README: Privacy). Same literal in
+# agent/run.py — kept in sync by a test.
+ZDR_PROVIDER = {"provider": {"zdr": True, "data_collection": "deny"}}
 
 if os.environ.get("GEPA_MODEL", "z-ai/glm-5.2") in MODELS:
     print(f"[judge] WARNING: judge model {MODELS} includes the GEPA reflection model — this invites "
@@ -54,7 +57,8 @@ _llms: dict[str, ChatOpenAI] = {}
 
 def _get_llm(model: str):
     if model not in _llms:  # built once per model — reuses the HTTP pool across many judge calls
-        _llms[model] = ChatOpenAI(model=model, base_url=BASE_URL, api_key=API_KEY, temperature=0)
+        _llms[model] = ChatOpenAI(model=model, base_url=BASE_URL, api_key=API_KEY, temperature=0,
+                                  extra_body=ZDR_PROVIDER)
     return _llms[model]
 
 

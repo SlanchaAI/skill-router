@@ -35,6 +35,29 @@ PROMOTE_MIN_MARGIN = float(os.environ.get("PROMOTE_MIN_MARGIN", "0.15"))   # mea
 PROMOTE_MIN_SAMPLES = int(os.environ.get("PROMOTE_MIN_SAMPLES", "3"))       # min held-out tasks
 PASS = float(os.environ.get("PROMOTE_PASS_SCORE", "0.5"))                   # a task "passes" at/above this
 COLLISION_SCORE = float(os.environ.get("COLLISION_SCORE", "0.93"))          # route-shadow cutoff
+RETENTION_WARN = float(os.environ.get("RETENTION_WARN", "0.5"))             # body-retention review warning
+
+
+def body_retention(champion_body: str, challenger_body: str) -> float:
+    """Fraction of the champion body's non-blank lines that survive (stripped) in the challenger —
+    a crude but cheap deletion detector for the review warning."""
+    champ = [line.strip() for line in champion_body.splitlines() if line.strip()]
+    if not champ:
+        return 1.0
+    kept = {line.strip() for line in challenger_body.splitlines()}
+    return sum(1 for line in champ if line in kept) / len(champ)
+
+
+def retention_warnings(champion: dict, challenger: dict, changed: list[str], samples: int) -> list[str]:
+    """Non-blocking review warnings: a small holdout can't license a large deletion, so a challenger
+    that drops most of the champion body gets flagged for the human reviewer (never auto-blocked)."""
+    if "body" not in changed:
+        return []
+    kept = body_retention(champion["body"], challenger.get("body", ""))
+    if kept >= RETENTION_WARN:
+        return []
+    return [f"challenger drops {1 - kept:.0%} of the champion body, gated on only {samples} "
+            f"held-out task(s) — review the deletions carefully"]
 
 
 def _description_shadows(skill: str, new_description: str) -> tuple[str, float]:
@@ -282,13 +305,14 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
                                          results["challenger"]["scores"], changed, challenger,
                                          routing_failures=route_failures, leakage=split["leakage"],
                                          routing_metrics=route_metrics)
+    warnings = retention_warnings(champion, challenger, changed, len(results["challenger"]["scores"]))
     summary = {
         "skill": skill, "improved": wins, "created": ts,
         "gepa": {"seed_score": seed_score, "best_score": best_score, "budget": budget},
         "ab": {v: {"run": r["run"], "mean": r["mean"], "scores": r["scores"], "tokens": r["tokens"]}
                for v, r in results.items()},
         "dataset": ds_name,
-        "gate": {"promotable": promotable, "blocked": blocked},
+        "gate": {"promotable": promotable, "blocked": blocked, "warnings": warnings},
         "changed_components": changed,
         "champion_components": champion,
         "challenger_components": challenger,
@@ -327,6 +351,8 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
     # Promotion gate: a mean win alone isn't enough — it must clear the anti-reward-hacking checks.
     if wins and not promotable:
         log(f"[ab] ⛔ challenger won the mean but the promotion gate BLOCKED it: {'; '.join(blocked)}.")
+    if warnings:
+        log(f"[ab] ⚠ {'; '.join(warnings)}")
     if not wins:
         log("[ab] champion holds — nothing to promote.")
     elif promote_now and promotable:
@@ -348,5 +374,7 @@ if __name__ == "__main__":
     ap.add_argument("--skip-gepa", action="store_true", help="debug: A/B champion vs itself")
     ap.add_argument("--challenger-file", help="reuse a checkpointed GEPA result, skip to the A/B")
     args = ap.parse_args()
+    from . import require_openrouter_key
+    require_openrouter_key()
     run_ab(args.skill, promote_now=args.promote, budget=args.budget,
            skip_gepa=args.skip_gepa, challenger_file=args.challenger_file)

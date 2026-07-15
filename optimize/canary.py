@@ -115,5 +115,7 @@ if __name__ == "__main__":
     ap.add_argument("--challenger-file", help="use a checkpointed GEPA result instead of the pending challenger")
     ap.add_argument("--promote", action="store_true", help="auto-promote on a live win (else recommend in the UI)")
     args = ap.parse_args()
+    from . import require_openrouter_key
+    require_openrouter_key()
     run_canary(args.skill, challenger_file=args.challenger_file, epsilon=args.epsilon,
                max_requests=args.max, min_samples=args.min_samples, auto_promote=args.promote)

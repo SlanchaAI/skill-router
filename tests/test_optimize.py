@@ -4,7 +4,7 @@ import numpy as np
 
 from optimize import ab as ab_mod
 from optimize import judge as judge_mod
-from optimize.ab import promotion_gate
+from optimize.ab import body_retention, promotion_gate, retention_warnings
 from optimize.canary import p_challenger_better
 from optimize.judge import DIMENSIONS, failed_dimensions
 
@@ -146,3 +146,64 @@ def test_failed_dimensions_flags_only_non_pass():
             "efficiency": "padded output"}
     assert set(failed_dimensions(dims)) == {"completeness", "efficiency"}
     assert failed_dimensions({d: "pass" for d in DIMENSIONS}) == []
+
+
+def test_body_retention_full_partial_empty():
+    assert body_retention("a\nb\nc", "a\nb\nc\nnew line") == 1.0
+    assert body_retention("a\nb\nc\nd", "a\nb\nrewritten") == 0.5
+    assert body_retention("a\nb", "totally\nnew") == 0.0
+    assert body_retention("", "anything") == 1.0          # nothing to lose
+    assert body_retention("a\n  a  \n\n", "a") == 1.0     # stripped + blank-line tolerant
+
+
+def test_retention_warns_on_big_deletion_with_thin_holdout():
+    champion = {"body": "\n".join(f"line {i}" for i in range(10))}
+    challenger = {"body": "a fresh contract"}
+    warns = retention_warnings(champion, challenger, changed=["body"], samples=4)
+    assert len(warns) == 1
+    assert "drops 100%" in warns[0] and "4 held-out task(s)" in warns[0]
+
+
+def test_retention_silent_when_content_kept_or_body_unchanged():
+    champion = {"body": "keep me\nand me"}
+    kept = {"body": "keep me\nand me\nplus a new rule"}
+    assert retention_warnings(champion, kept, changed=["body"], samples=4) == []
+    assert retention_warnings(champion, {"body": "all new"}, changed=["description"], samples=4) == []
+
+
+def test_retention_threshold_is_inclusive(monkeypatch):
+    champion = {"body": "a\nb"}
+    half = {"body": "a\nnew"}                      # retention exactly 0.5
+    assert retention_warnings(champion, half, changed=["body"], samples=4) == []   # >= default 0.5
+    monkeypatch.setattr(ab_mod, "RETENTION_WARN", 0.6)
+    warns = retention_warnings(champion, half, changed=["body"], samples=4)
+    assert len(warns) == 1 and "drops 50%" in warns[0]
+
+
+def test_gate_ignores_parity_with_no_cases():
+    routing = {"champion": {"top1": 1.0, "recall_at_3": 1.0, "no_route_precision": 1.0},
+               "challenger": {"top1": 1.0, "recall_at_3": 1.0, "no_route_precision": 1.0},
+               "parity": {"rate": 0.0, "total": 0}}   # no parity cases -> rate is meaningless
+    ok, reasons = promotion_gate("pdf", [0.2] * 3, [0.9] * 3, changed=["description"],
+                                 challenger={"description": "distinct"}, routing_metrics=routing)
+    assert ok and reasons == []
+
+
+def test_zdr_provider_pinned_and_in_sync():
+    from optimize.judge import ZDR_PROVIDER
+    assert ZDR_PROVIDER == {"provider": {"zdr": True, "data_collection": "deny"}}
+    from agent.run import ZDR_PROVIDER as agent_zdr
+    assert agent_zdr == ZDR_PROVIDER  # duplicated literal (import-weight reasons) must not drift
+
+
+def test_judge_llms_carry_zdr_extra_body(monkeypatch):
+    captured = {}
+
+    class FakeLLM:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+    monkeypatch.setattr(judge_mod, "ChatOpenAI", FakeLLM)
+    judge_mod._llms.clear()
+    judge_mod._get_llm("some/model")
+    judge_mod._llms.clear()
+    assert captured["extra_body"] == {"provider": {"zdr": True, "data_collection": "deny"}}

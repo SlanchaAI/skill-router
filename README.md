@@ -111,52 +111,66 @@ The `SERVING MODEL` line is the weak/strong split at work: a routed task runs on
 `STRONG_MODEL` (step 11).
 Open **http://localhost:3100** (login `demo@local.dev` / `localdemo123` — local demo literals baked
 into the compose file, not secrets) to see the full trace: every tool call, LLM call, and token count.
+(Have a Langfuse project already? You can trace there instead — see
+[Using your own Langfuse project](#using-your-own-langfuse-project).)
 
 ### 3. Write a first-draft skill — and watch it under-deliver
 
 A skill is a directory with a `SKILL.md`: YAML frontmatter whose `description` is the routing key,
-and a body the agent loads. Write the quick version you'd actually jot down:
+and a body the agent loads. The tutorial skill is **Tailwind CSS** — a real library with a hard
+version break (v4, January 2025, moved configuration from `tailwind.config.js` into CSS), which
+makes it a perfect stress test: the quick notes you'd actually jot down are not just thin, they're
+*stale*. Write that first draft:
 
 ```bash
-mkdir -p skills/excel-formulas
-cat > skills/excel-formulas/SKILL.md <<'EOF'
+mkdir -p skills/tailwind
+cat > skills/tailwind/SKILL.md <<'EOF'
 ---
-name: excel-formulas
-description: Use this skill when the user needs help writing or debugging spreadsheet formulas
-  in Excel or Google Sheets — lookups, sums, conditionals, text manipulation, or date math.
+name: tailwind
+description: Use this skill when the user needs help with Tailwind CSS.
 ---
 
-# Excel formulas
+# Tailwind CSS
 
-1. Prefer built-in functions over manual arithmetic.
-2. Use VLOOKUP to find values in tables.
-3. Use IF for conditions; SUM and AVERAGE for aggregation.
-4. Wrap formulas that can error in IFERROR.
+1. Install with npm and run the init command to create tailwind.config.js.
+2. Add your source files to the `content` array so classes are picked up.
+3. Put custom colors, fonts, and breakpoints under `theme.extend`.
+4. Start your CSS with `@tailwind base;` `@tailwind components;` `@tailwind utilities;`.
 EOF
 ```
 
-`skills/` is bind-mounted and the server hot-reloads on change — the skill is live immediately.
-Now send it some realistic traffic:
+(Every line of that body is the v3 way — i.e., wrong since v4. That's not sabotage, that's what
+old notes look like.) `skills/` is bind-mounted and the server hot-reloads on change — the skill
+is live immediately. Now send it some realistic traffic:
 
 ```bash
-docker compose run --rm agent "For each order in A2:D500, look up the customer tier in Sheet2 and return the matching discount rate — orders with no match should show 0 instead of an error."
+for t in "Add a brand color to my Tailwind setup so bg-brand works." \
+         "Set up Tailwind in a fresh Vite app." \
+         "Why aren't the classes from my component library in node_modules getting styled?"; do
+  docker compose run --rm agent "$t"
+done
 ```
 
 ```
+== Add a brand color to my Tailwind setup so bg-brand works.
 PROPOSED SKILLS (MCP suggest_skills):
-    0.62  api-rate-limiting-helper (related — compose/extend) — Designs rate limiting strategies...
-
-SERVING MODEL: accounts/fireworks/models/qwen3p7-plus
-
+   0.723  tailwind — Use this skill when the user needs help with Tailwind CSS.
 LOADED SKILLS (MCP get_skill): (none)
-TOKENS: 46428 in / 3512 out
+== Set up Tailwind in a fresh Vite app.
+PROPOSED SKILLS (MCP suggest_skills):
+   0.709  tailwind — Use this skill when the user needs help with Tailwind CSS.
+LOADED SKILLS (MCP get_skill): ['tailwind@77156f5efe1a…']
+== Why aren't the classes from my component library in node_modules getting styled?
+PROPOSED SKILLS (MCP suggest_skills):
+   0.621  web-artifacts-builder (related — compose/extend) — Suite of tools for creating elaborate…
+LOADED SKILLS (MCP get_skill): (none)
 ```
 
-Read that routing line again: a spreadsheet-lookup request matched **a rate-limiting skill**, and
-`excel-formulas` never even surfaced — the first-draft description under-triggers (in our traffic,
-3 of 4 realistic requests missed it). The answer itself came from the model's own knowledge after
-burning 46k input tokens looking for spreadsheet files, resting on invented column assumptions.
-The skill helped with none of it. Both failures are now sitting in your traces.
+Three requests, three different failures. The requests that *say* "Tailwind" route fine — and the
+second one actually **loaded the skill**, meaning live traffic was just served the stale v3 notes.
+The third request — a Tailwind problem that never says Tailwind — misrouted to a different skill
+entirely (`web-artifacts-builder` mentions Tailwind in its description, so it wins on vocabulary).
+All three failures are now sitting in your traces.
 
 ### 4. Mine what's failing (from real traces)
 
@@ -167,62 +181,94 @@ tagged with it, or ranking it in the embedding top-5 for the task text — so mi
 still counts toward the skill that *should* have served it:
 
 ```bash
-docker compose run --rm optimize-mine excel-formulas
+docker compose run --rm optimize-mine tailwind
 ```
 
 ```
-[mine] analyzed 6 real traces · mean judge score 0.73 · 1 bad cases (score < 0.5)
+[mine] pulling recent traces from Langfuse for 'tailwind'…
+[mine] 39/50 recent traces relevant to 'tailwind' (tagged with it, or ranking it in the embedding top-5)
+[mine] analyzed 39 real traces · mean judge score 0.50 · 20 bad cases (score < 0.5)
 [mine] failure dimensions (paper's Failure Analyzer), most common first:
-    completeness             2/6  ███
-        · 'For each order in A2:D500, look up the customer tier in Sheet2 and ret' → Python script not provided
-        · 'For each order row in A2:D500, look up the customer tier from the tabl' → assumes customer ID column
-    instruction_following    2/6  ███
-        · 'For each order in A2:D500, look up the customer tier in Sheet2 and ret' → Python script not provided
-    ...
+    correctness             20/39  █████
+        · 'Set up Tailwind in a fresh Vite app.' → Missing postcss and autoprefixer dependencies and postcss.config.js
+        · 'Set up Tailwind CSS v4 in a project bundled with plain PostCSS (no Vit' → Uses v3 directives and config, not v4 API.
+    completeness            20/39  █████
+        · 'Set up Tailwind in a fresh Vite app.' → Incomplete: essential PostCSS configuration is absent
+    instruction_following   20/39  █████
+        · 'Set up Tailwind CSS v4 in a project bundled with plain PostCSS (no Vit' → Ignores rubric: uses @tailwind directives and tailwind.config.js.
+    efficiency              16/39  ████
+        · 'Set up Tailwind CSS v4 in a project bundled with plain PostCSS (no Vit' → Includes unnecessary tailwind.config.js and v3-specific steps.
 [mine] 6 weakest tasks mined as eval candidates → optimize on these next.
 ```
+
+The diagnosis is version drift, named per dimension: answers built on `tailwind.config.js` and
+`@tailwind` directives — the v3 world the stub teaches and pretraining reinforces. The weakest
+mined tasks are also surfaced as eval candidates: real traffic is the best source of train/holdout
+tasks for `optimize/tasks/<skill>.yaml`, and the eval set used below was built exactly that way —
+see [Writing eval task sets](#writing-eval-task-sets) for the format and the full annotated example.
 
 (Reference-free judging of live traffic is noisier than rubric-based judging — treat mined
 dimensions as a diagnosis to investigate, not a verdict. The optimizer's own gate runs on rubrics.)
 
-### 5. Optimize the body: GEPA + held-out A/B
+### 5. Optimize the body: parallel candidates + a held-out A/B
 
-```bash
-docker compose run --rm optimize excel-formulas
+Write an eval task set for the skill (`optimize/tasks/tailwind.yaml`) — train and holdout tasks
+whose rubrics carry the v4 ground truth, built from the mined traffic above; the format, and the
+rules that make a set worth gating on, are in [Writing eval task sets](#writing-eval-task-sets)
+(for a quick start, the teacher can also **auto-draft** one: any CLI optimize run on a skill with
+no task set drafts train/holdout tasks first and persists them). Then open the approval UI at
+**http://localhost:8080** — the **Skills** list shows every skill the router serves, and skills
+with a task set carry an `evals` chip — and click **Optimize**, watching the optimizer log stream
+on the page. The optimizer authors several candidate bodies in parallel (the teacher model, each
+steered by a different angle), races them on the train tasks — successive halving, every wave
+fully concurrent — and A/Bs the winner against the champion through the full agent on the
+held-out tasks (a few minutes, well under $1; the serving-side A/B injects each variant body, so
+the comparison is exactly body vs body). Repeat runs are cheaper still: the champion's held-out
+scores are cached by revision. See [Optimization strategies](#optimization-strategies) for the
+design — and for the slower GEPA reflective loop it replaced as default (`--gepa`). The same run
+also works headless (`docker compose run --rm optimize tailwind`). Our run:
+
+```
+[bestofn] optimizing 'tailwind' (components: ['body']; frozen: ['description']) on 6 train tasks (parallel best-of-N + racing)…
+[bestofn] seed scores 0.050 on 6 train tasks; authoring 5 candidates in parallel…
+[bestofn] race round 1/6 (Set up Tailwind CSS v4 in a Vite project — what do…): 3 candidate(s) advance, 2 dropped
+[bestofn] race round 2/6 (Add a custom color `brand` (#7c3aed) in Tailwind v…): 2 candidate(s) advance, 1 dropped
+[bestofn] race round 3/6 (How does Tailwind v4 decide which files to scan fo…): 2 candidate(s) advance
+[bestofn] race round 6/6 (My v3 markup uses `shadow-sm` and `rounded-sm`, an…): 2 candidate(s) advance
+[bestofn] winner: candidate 1 at 0.967 (seed 0.050)
+[opt] inner-loop score: seed 0.050 -> best 0.967
+[ab] evaluating champion vs challenger on 6 held-out tasks…
+[ab] champion: mean judge score 1.000  [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+[ab] challenger: mean judge score 0.833  [1.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+[ab] champion 1.000 vs challenger 0.833 -> champion holds
+[ab] champion holds — nothing to promote.
 ```
 
-The skill has no eval set yet, so the teacher model **auto-drafts one** (train/holdout, persisted
-to `optimize/tasks/excel-formulas.yaml`), then GEPA evolves the body on the train tasks and the
-champion and challenger are A/B-ed through the full agent on the held-out tasks (~$1–1.5 of
-API credit; the serving-side A/B injects each variant body, so the comparison is exactly
-body vs body):
+Read the two halves of that log separately, because they teach different things. The **inner loop**
+did its job: served through the stub in a bare rollout, the model scored 0.050 — and the authors,
+briefed with the rubrics and the seed's failures, distilled a v4-era body scoring 0.967 in about
+two minutes. But the **held-out A/B runs through the full agent**, and there the champion scored a
+perfect 1.000: a frontier serving model, given room to reason, recognizes the stub's v3 advice as
+stale and answers v4 from its own knowledge. The rewrite could only match it (its one 0.0 was a
+runaway loop on one task), so the gate refused the swap. *No measurable win, no challenger.*
 
-```
-[draft] no eval set for 'excel-formulas' — teacher (accounts/fireworks/models/glm-5p2) drafting 8 train/holdout tasks…
-[gepa] optimizing 'excel-formulas' (components: ['body']; frozen: ['description']) on 4 train tasks…
-[gepa] inner-loop score: seed 0.250 -> best 0.675
-[gepa] components changed: ['body']
-[ab] champion:   mean judge score 0.100  [0.4, 0.0, 0.0, 0.0]
-[ab] challenger: mean judge score 0.675  [0.5, 0.7, 0.5, 1.0]
-[ab] champion 0.100 vs challenger 0.675 -> CHALLENGER WINS
-[ab] output tokens/task: 128 -> 160 (+32)  ⚠ output-token regression
-[ab] ⚠ challenger drops 100% of the champion body, gated on only 4 held-out task(s) — review the deletions carefully
-[ab] pending approval written to runs/pending/excel-formulas.json — review + promote at http://localhost:8080
-```
-
-The four-line stub scored **0.100** on held-out tasks; the challenger scores **0.675** — a +0.575
-margin, far above the gate's +0.15 bar. Note both ⚠ flags are doing their jobs: output tokens grew
-(richer answers than a stub's — worth a look, not a block), and the retention warning fires because
-the challenger replaced the entire body — for a four-line stub that's exactly right, and the human
-reviewing the diff decides.
+That result generalizes, and it's worth being direct about: **body-pass wins concentrate where the
+body carries knowledge the serving model can't have** — your internal tools, your conventions,
+your post-cutoff dependencies — exactly the rubric-distillation workflow described in
+[Writing eval task sets](#writing-eval-task-sets). On public-knowledge domains, strong models
+transcend bad bodies (and much weaker models can fail to follow *any* body buried in a large agent
+scaffold — we measured both edges). The gate's refusals are the feature that makes the wins
+trustworthy: in a companion run against the NVIDIA-authored `accelerated-computing-cudf` skill,
+the challenger dropped half the champion body and regressed a held-out task — blocked, 0.980 vs
+0.800. What *this* stub measurably lacks is routing — next step.
 
 **Optimization is greedy — one component per pass, each scored by its own role's metric:**
 
 | pass | command | inner-loop objective | cost |
 |------|---------|---------------------|------|
-| body (default) | `optimize excel-formulas` | LLM judge on train tasks; full-agent A/B gate | ~$1 |
-| description | `optimize excel-formulas --description` | the **routing suite**, scored by the real embedding router — no LLM rollouts (reflection only) | ~$0.05, seconds |
-| scripts | `optimize excel-formulas --scripts` | refused for now: bundled scripts need execution-grounded evals before a rewrite can be measured | — |
+| body (default) | the UI's **Optimize** button, or `optimize tailwind` | LLM judge on train tasks; full-agent A/B gate | ~$0.3 (`--gepa`: ~$1) |
+| description | `optimize tailwind --description` | the **routing suite**, scored by the real embedding router — no LLM rollouts (reflection only) | ~$0.05, seconds |
+| scripts | `optimize tailwind --scripts` | refused for now: bundled scripts need execution-grounded evals before a rewrite can be measured | — |
 
 This split exists because a quality judge can't measure routing and a router can't measure quality;
 letting one metric grade both components teaches the optimizer to hide behavioral rules in the
@@ -232,75 +278,83 @@ inner loop can't optimize against different instructions than the outer loop mea
 `GEPA_ROLLOUTS=agent` runs every rollout through the full agent scaffold when the failures you're
 chasing live there (e.g. code written to a scratch file instead of the answer).
 
-### 6. Review and promote in the approval UI
+### 6. Fix the routing with the description pass
 
-Open **http://localhost:8080**:
+Step 3's third request — the one that never says "Tailwind" — misrouted, and the routing key is
+the `description`, so routing gets its own pass with its own metric. It optimizes against the
+`routing:` cases in `optimize/tasks/tailwind.yaml`: realistic positive phrasings plus
+`expected: null` negatives. One lesson from our own run: our first suite's positives all contained
+the word "Tailwind", the stub description already scored 0.833 on it, and the pass rightly
+reported *champion holds* — a suite of phrasings that already route has no power to improve
+anything. **The cases that matter are the real misses**, so put your mined traffic in the suite
+(we added the node_modules request verbatim, plus a "classes disappear in the production build"
+variant):
 
-![approval UI — skills list](docs/ui-home.png)
+```bash
+docker compose run --rm optimize tailwind --description
+```
 
-Click **Review** to see the judge scores, the token shift, both warnings, and the full body diff:
+```
+[routing] optimizing 'tailwind' description against 7 routing cases (budget 60 metric calls; inner loop is embedding-only — no LLM rollouts)…
+[routing] inner-loop score: seed 0.571 -> best 0.857
+[routing] champion: top1 0.600 · recall@3 0.600 · no-route precision 0.500
+[routing] challenger: top1 1.000 · recall@3 1.000 · no-route precision 0.500
+[routing] pending description written to /app/runs/pending/tailwind.json — review + promote at http://localhost:8080
+```
+
+Top-1 routing goes **0.600 → 1.000** in seconds, for a few reflection calls (~$0.03) — every
+candidate description is scored by the real embedding router against the real skill corpus, so
+there's nothing for an LLM judge to be fooled about. Look at what the winning description learned
+to do: it names the *symptoms* users actually type ("unstyled classes from component libraries in
+node_modules", "utility classes that work in dev but disappear in the production build") — and it
+deliberately keeps v3 vocabulary like `tailwind.config.js`, because a routing description must
+speak the words traffic uses, even outdated ones; the v4 truth lives in the body. The gate
+requires no regression on any routing metric, at least one strict improvement, and no collision
+with another skill's description. A scored challenger is now waiting for you in the UI.
+
+### 7. Review and promote in the approval UI
+
+Back at **http://localhost:8080**, the header pill flips to **1 to review**, a REVIEW alert
+appears, and the `tailwind` row is highlighted with a `challenger ready` chip:
+
+![approval UI — skills list with a challenger ready](docs/ui-home.png)
+
+Click **Review challenger** (the pending review also opens automatically). For this routing
+challenger the review shows the metric deltas, the gate verdict, and the description diff — a
+body challenger shows judge scores, the token shift, and retention warnings the same way:
 
 ![approval UI — pending challenger review](docs/ui-review.png)
 
 **Approve & promote** verifies the evidence still matches the on-disk champion and the exact
-challenger, snapshots the prior revision, and swaps the challenger into `skills/excel-formulas/`.
-The MCP server notices the revision change on its next request — the new body is served with **no
-restart**. **Reject** discards it.
-
-### 7. Fix the routing with the description pass
-
-The body is better — but the router still under-triggers (step 3's lookup request never matched).
-That's a *routing* problem, so it gets the routing-objective pass. It optimizes against the
-`routing:` cases in `optimize/tasks/excel-formulas.yaml` — hand-write them (realistic positive
-phrasings plus `expected: null` negatives), or let the teacher **auto-draft and persist** a suite
-on first run:
-
-```bash
-docker compose run --rm optimize excel-formulas --description
-```
-
-```
-[routing] optimizing 'excel-formulas' description against 6 routing cases (budget 40 metric calls;
-          inner loop is embedding-only — no LLM rollouts)…
-[routing] inner-loop score: seed 0.417 -> best 0.833
-[routing] champion:   top1 0.250 · recall@3 0.500 · no-route precision 0.500
-[routing] challenger: top1 1.000 · recall@3 1.000 · no-route precision 0.500
-[routing] pending description written to runs/pending/excel-formulas.json — review + promote at http://localhost:8080
-[usage] tokens spent by this routing pass (reflection only):
-  reflection      4 calls      2,372 in     8,579 out
-```
-
-Top-1 routing goes **0.250 → 1.000** in seconds, for four reflection calls (~$0.03) — every
-candidate description is scored by the real embedding router against the real skill corpus, so
-there's nothing for an LLM judge to be fooled about. The gate requires no regression on any routing
-metric, at least one strict improvement, and no collision with another skill's description; then
-the same review UI shows the metric deltas and the description diff. Approve it.
+challenger, snapshots the prior revision, and swaps the challenger into `skills/tailwind/`.
+The MCP server notices the revision change on its next request — the new description is served
+with **no restart**. **Reject** discards it.
 
 ### 8. The same request now finds the skill
 
 ```bash
-docker compose run --rm agent "Write a formula that extracts the domain name from an email address in cell C2."
+docker compose run --rm agent "Why aren't the classes from my component library in node_modules getting styled?"
 ```
 
 ```
 PROPOSED SKILLS (MCP suggest_skills):
-   0.697  excel-formulas — Use this skill when the user asks to write, generate, or create an Excel...
+   0.661  tailwind — Use this skill when the user needs help with Tailwind CSS, including con…
 
-RESULT:
-=RIGHT(C2, LEN(C2) - FIND("@", C2))
+SERVING MODEL: accounts/fireworks/models/qwen3p7-plus
 
-This finds the `@` symbol and returns everything after it.
+LOADED SKILLS (MCP get_skill): ['tailwind@1b65da6e92f1…']
+TOKENS: 28882 in / 1005 out
 ```
 
-Requests that missed the skill or landed in the related band now route to it directly (top-1 went
-1.000 on the routing suite), and the matured body wins its held-out A/B 0.675 to 0.100. One honest
-caveat from our runs: on trivially easy requests the serving model sometimes answers without
-bothering to load the matched skill at all — the controlled body-vs-body comparison is the A/B in
-step 5, which guarantees serving; live loading behavior is the serving model's own.
+The exact request that misrouted in step 3 now clears the threshold, routes to `tailwind`, and the
+agent loads the promoted revision (note the new `@…` hash). One honest caveat from our runs: on
+trivially easy requests the serving model sometimes answers without bothering to load the matched
+skill at all — the controlled body-vs-body comparison is the A/B in step 5, which guarantees
+serving; live loading behavior is the serving model's own.
 
 That's the loop: a first-draft skill → real traffic → mined diagnosis → a body pass gated on
-held-out quality → a description pass gated on routing metrics → human approval at every promotion
-→ hot reload.
+held-out quality (which here correctly refused a rewrite the serving model didn't need) → a
+description pass gated on routing metrics → human approval at every promotion → hot reload.
 
 ### 9. (Optional) Promote via a live canary instead
 
@@ -471,7 +525,10 @@ Set in `.env` (never committed):
 | `LENGTH_PENALTY` | `0.10` | max score subtracted for a very long body |
 | `LOOP_HEALTH_THRESHOLD` | `0.7` | continuous loop re-optimizes skills whose mined mean score is below this |
 | `LOOP_PASSES` | `body` | passes the loop runs per unhealthy skill, in order (e.g. `body,description`) |
-| `GEPA_ROLLOUTS` | `direct` | body-pass rollout mode: `direct` (one call under the serving contract) or `agent` (full scaffold per rollout — sees scaffold-driven failures, ~10× cost) |
+| `OPTIMIZE_STRATEGY` | `parallel` | inner-loop strategy: `parallel` = best-of-N + racing (concurrent, minutes), `gepa` = sequential reflective evolution — see [Optimization strategies](#optimization-strategies) |
+| `OPTIMIZE_CANDIDATES` | `5` | parallel strategy: candidate rewrites authored and raced per run |
+| `TAVILY_API_KEY` | — | optional author-side web research during the parallel pass — see [Optimization strategies](#optimization-strategies) |
+| `GEPA_ROLLOUTS` | `direct` | rollout mode for either strategy: `direct` (one call under the serving contract) or `agent` (full scaffold per rollout — sees scaffold-driven failures, ~10× cost) |
 | `RETENTION_WARN` | `0.5` | ⚠ review warning when the challenger keeps less than this fraction of the champion body |
 | `OPTIMIZE_COMPONENTS` | `body` | what GEPA may rewrite; add `description` (routing gate applies) or `file:<path>` entries (diffed, never executed — avoid scripts) |
 | `EXEC_SANDBOX` | `docker` | execution-grounded checks: `docker` = throwaway locked-down container (fails closed to inconclusive when docker is unreachable), `1` = bare subprocess (legacy), `off` = static checks only |
@@ -479,9 +536,130 @@ Set in `.env` (never committed):
 | `SANDBOX_RUNTIME` | — | optional container runtime for sandbox runs, e.g. `runsc` for gVisor kernel-level isolation |
 | `SKILL_MAX_DESCRIPTION` | `1024` | `create_skill` description hard cap (Agent Skills spec) |
 | `SKILL_MAX_BODY` | `40000` | `create_skill` body ceiling (~500 lines) |
+| `LANGFUSE_BASE_URL` | `http://langfuse-web:3000` (the bundled stack) | Langfuse API endpoint every service traces to and mines from — see [Using your own Langfuse project](#using-your-own-langfuse-project) |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | `pk-lf-local-demo` / `sk-lf-local-demo` | project API keys; the defaults are the bundled stack's headless-init literals (local demo values, not secrets) |
+| `LANGFUSE_PUBLIC_URL` | `http://localhost:3100` | where your *browser* reaches Langfuse — the approval UI links traces here |
 
 See [Keeping the optimizer honest](#keeping-the-optimizer-honest-anti-reward-hacking) for the
 promotion-gate knobs (`PROMOTE_MIN_MARGIN`, `PROMOTE_MIN_SAMPLES`, `COLLISION_SCORE`, `JUDGE_MODELS`).
+
+### Optimization strategies
+
+The inner loop that turns a champion skill into a challenger has two strategies
+(`OPTIMIZE_STRATEGY`); both feed the same held-out A/B and promotion gate — the honesty machinery
+doesn't know or care which inner loop produced the challenger.
+
+**`parallel` (default)** — best-of-N with racing (`optimize/bestofn.py`). Three concurrent waves:
+
+1. **baseline** — the seed skill is rolled out on every train task at once; its judge feedback
+   becomes the failure brief the authors write against
+2. **author** — N candidate rewrites (`OPTIMIZE_CANDIDATES`, default 5) are drafted in parallel by
+   the teacher model, each steered by a different angle (concise-imperative, worked-examples,
+   edge-cases-first, …) so the pool isn't N copies of the same idea
+3. **race** — successive halving over the train tasks: every survivor answers the next task (all
+   rollouts and judge calls concurrent), the bottom half is dropped, repeat until the tasks run out
+
+The finalists' cumulative mean — minus the same length penalty GEPA uses, so a candidate can't win
+by bloating the body — picks the winner, and a winner that doesn't beat the seed returns the seed
+unchanged. Wall-clock is bounded by the slowest single model call per wave: minutes, not tens of
+minutes, on ~15 rollouts instead of GEPA's 60.
+
+**`gepa`** (`--gepa`, or `OPTIMIZE_STRATEGY=gepa`) — the sequential reflective loop
+(`optimize/gepa_loop.py`): propose → evaluate → reflect on observed failures → propose again,
+under a `--budget` of metric calls (default 60). Slower and costlier, but each candidate is
+*informed by the failures of earlier candidates* — worth it on mature skills where headroom is
+small and blind parallel drafts plateau. (The trade in one line: `parallel` buys wall-clock with
+breadth; `gepa` buys quality-per-rollout with depth.)
+
+Independent of strategy, the champion's held-out A/B results are cached in `runs/eval-cache/`,
+keyed by (skill revision, holdout tasks, serving model, judge). Most optimize runs end "champion
+holds", so the next attempt against an unchanged champion only pays for the challenger's side of
+the gate.
+
+**Optional author-side web research** (`TAVILY_API_KEY`; `TAVILY_KEY` also accepted): when the
+seed's failures look like knowledge gaps (correctness/completeness dimensions), the parallel pass
+runs **one** web research step on the failing topics and hands every author the same brief —
+flagged as potentially postdating the model's training and authoritative over its priors. Design
+constraints, deliberately: research is **author-only** (the judge never sees it — rubrics stay the
+fixed measuring stick), one shared brief per run (five authors independently searching would write
+candidates against five different snapshots of the web — noise the race can't tell from quality),
+briefs are cached content-addressed in `runs/research-cache/` (the autopilot re-optimizing a skill
+costs zero extra searches), and formatting-only failures skip research entirely. Note the trust
+boundary: searched content flows into a skill body that becomes an agent's system prompt — the
+human review gate on every promotion is what stands between the web and your library.
+
+### Writing eval task sets
+
+Task sets are **runtime artifacts, not shipped opinions** — the repo commits none. They live in
+`optimize/tasks/<skill>.yaml` (gitignored), and you get one per skill three ways: write it by hand,
+let the teacher **auto-draft** one on a skill's first CLI optimize run, or promote the miner's
+"weakest real tasks" candidates into it. Anatomy, annotated:
+
+```yaml
+skill: accelerated-computing-cudf
+train:                # the optimizer sees these — rubrics are the GROUND TRUTH it distills
+- task: You trained a large XGBoost model, but GPU inference is bottlenecked by Python
+    overhead and row-by-row execution. Which RAPIDS feature can run the trained forest
+    efficiently without retraining it?
+  rubric: "Must name cuML's Forest Inference Library (FIL) — NOT Treelite (the exchange
+    format FIL loads; models often answer Treelite, which is wrong). Must say FIL imports
+    trained XGBoost, LightGBM, scikit-learn, and Treelite-format ensembles for batched GPU
+    inference. Strong answers discuss batch size, tree layout, precision, memory, and when
+    CPU inference still wins."
+  deliverable: text   # optional: text | command | css | … — anything non-code disables the
+                      # static "answer must contain a runnable Python block" check
+holdout:              # the promotion gate ONLY trusts these — the optimizer never sees them
+- task: Our fraud team has a LightGBM ensemble trained offline; scoring 200M rows nightly
+    is too slow. Without retraining, how do we speed this up with RAPIDS, and what
+    trade-offs should we plan for?
+  rubric: "Must recommend FIL loading the LightGBM model … must discuss two trade-offs."
+  deliverable: text
+# optional per-task execution grounding (code tasks): the sandbox runs the answer's code
+# against the fixture and asserts on its artifacts — an objective signal the judge can't
+# be argued out of:
+#   check:
+#     fixture: open("input.txt", "w").write("hello")
+#     assert: assert open("output.txt").read() == "HELLO"
+routing:              # the description pass optimizes against these; the gate checks them
+- task: "Which RAPIDS feature runs my trained forest on GPU without retraining?"
+  expected: accelerated-computing-cudf
+  harness: codex
+- task: "Merge two PDF files and add page numbers."
+  expected: null      # negatives: tasks that must NOT route here (no-route precision)
+  harness: codex
+```
+
+The rules that make a set worth gating on: **holdout must be a real split** (a flat `tasks:` list
+is flagged as leakage and can never promote), holdout tasks should *recombine* what train rubrics
+teach rather than introduce new facts (the challenger can only learn what train carries — that's
+also how skills for internal tools work: **your rubrics are how ground truth enters the system**,
+the optimizer distills them into the body and the holdout proves it generalized), and every task
+an entire pool aces is dead weight — an eval everything scores 1.0 on has zero power to rank
+challengers.
+
+### Using your own Langfuse project
+
+By default `docker compose up` runs a **self-hosted Langfuse** for you (UI at
+**http://localhost:3100**, login `demo@local.dev` / `localdemo123` — headless-init literals baked
+into `docker-compose.yml`, not secrets; all demo traces land in its `ingot` project). To point
+ingot at an **existing Langfuse project** instead — Langfuse Cloud or your own deployment — set
+all three in `.env` and restart (`docker compose up -d`):
+
+```bash
+LANGFUSE_PUBLIC_KEY=pk-lf-...                  # your project's keys: Project Settings -> API Keys
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com   # or your self-hosted URL (region URL for Cloud, e.g. https://us.cloud.langfuse.com)
+LANGFUSE_PUBLIC_URL=https://cloud.langfuse.com # optional: where your browser reaches it (UI trace links)
+```
+
+Two gotchas:
+
+- `LANGFUSE_BASE_URL` must be reachable **from inside the containers**. A Langfuse running
+  elsewhere on the same machine is `http://host.docker.internal:<port>` (Docker Desktop) or your
+  host's LAN IP — *not* `http://localhost:<port>`, which inside a container is the container itself.
+- The bundled Langfuse stack still starts (it's harmless, just unused); it only no longer receives
+  traces. Everything — agent tracing, `optimize-mine`, the canary loop — now reads and writes your
+  project, so expect demo traffic to appear there.
 
 The teacher/student split is deliberate: a strong model authors and judges skills, but rollouts and
 the A/B always run on the model the skills will actually serve.
@@ -499,7 +677,7 @@ the A/B always run on the model the skills will actually serve.
     flag — the weak/strong escalation signal (see [Bring your own agent](#bring-your-own-agent-mcp-only))
 - **`agent/run.py`** — [deepagents](https://github.com/langchain-ai/deepagents) LangGraph agent wired to those tools via `langchain-mcp-adapters`, traced to Langfuse (tagged with the routed skill and `revision=<name>@<rev>`). Serves routed tasks on the weak `AGENT_MODEL` and escalates truly novel tasks (empty `suggest_skills`) to `STRONG_MODEL`, which authors the new skill.
 - **`skills/<name>/SKILL.md`** — YAML `description` is the routing key; the body is what the agent loads.
-- **`optimize/`** — success/failure mining over real traces (`mine.py`), multi-dimensional LLM judge (`judge.py`), GEPA loop over the skill description/body with diagnose→minimal-edit reflection (`gepa_loop.py`), A/B + revisioned evidence (`ab.py`), live **canary** promotion (`canary.py`), snapshot/staged promotion with rollback (`promote.py`), per-role token ledger (`usage.py`). A/B agents get mutation tools stripped, so evals can't alter the library. Promotion records the exact skill revisions plus `evidence.json`/`EVIDENCE.md`, and refuses stale or mismatched revisions. The mining + categorized-failure ideas are borrowed from [SkillForge (Liu et al., arXiv:2604.08618)](https://arxiv.org/abs/2604.08618).
+- **`optimize/`** — success/failure mining over real traces (`mine.py`), multi-dimensional LLM judge (`judge.py`), two inner-loop strategies — parallel best-of-N with racing (`bestofn.py`, the default) and the GEPA loop with diagnose→minimal-edit reflection (`gepa_loop.py`) — A/B + revisioned evidence (`ab.py`), live **canary** promotion (`canary.py`), snapshot/staged promotion with rollback (`promote.py`), per-role token ledger (`usage.py`). A/B agents get mutation tools stripped, so evals can't alter the library. Promotion records the exact skill revisions plus `evidence.json`/`EVIDENCE.md`, and refuses stale or mismatched revisions. The mining + categorized-failure ideas are borrowed from [SkillForge (Liu et al., arXiv:2604.08618)](https://arxiv.org/abs/2604.08618).
 - **`ui/`** — FastAPI approval UI (one HTML page, no build step).
 
 ### Bring your own agent (MCP only)

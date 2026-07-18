@@ -43,7 +43,7 @@ For every task, first call `suggest_skills`, then decide from what it returns. O
   knowledge, then before your final answer you MUST call `create_skill` exactly once to attempt to
   persist a reusable skill distilled from your solution (description = one paragraph starting "Use
   this skill when..."; body = the general method/steps, not the specifics of this one request).
-  A refusal is expected when trusted-local agent writes are disabled and must not affect the answer.
+  This queues an inactive candidate for human review and must not affect the answer.
 
 Prefer reusing/extending an existing skill over creating a new one. Keep the final answer concise.
 Your final answer must contain the complete deliverable itself — e.g. full runnable code inline —

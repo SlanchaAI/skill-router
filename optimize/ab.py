@@ -1,10 +1,11 @@
-"""Optimize a full skill and A/B it: GEPA evolves its routing description and SKILL.md body into a
-challenger, then champion and challenger run through the full agent with a local `route_and_load`.
-Each variant is a
-Langfuse dataset run (side-by-side in the UI); the result is written to runs/pending/<skill>.json for
-approval in the UI (or promoted directly with --promote).
+"""Optimize a full skill and A/B it: the inner loop turns the skill's components into a challenger
+— by default parallel best-of-N with racing (optimize.bestofn, seconds-scale), or GEPA's sequential
+reflective evolution with --gepa / OPTIMIZE_STRATEGY=gepa — then champion and challenger run through
+the full agent with a local `route_and_load`. Each variant is a Langfuse dataset run (side-by-side
+in the UI); the result is written to runs/pending/<skill>.json for approval in the UI (or promoted
+directly with --promote).
 
-Usage: python -m optimize.ab <skill> [--promote] [--budget N] [--skip-gepa]
+Usage: python -m optimize.ab <skill> [--promote] [--gepa] [--candidates N] [--budget N] [--skip-gepa]
 """
 import argparse
 import asyncio
@@ -47,6 +48,22 @@ RETENTION_WARN = float(os.environ.get("RETENTION_WARN", "0.5"))             # bo
 # evals.
 OPTIMIZE_COMPONENTS = [c.strip() for c in os.environ.get("OPTIMIZE_COMPONENTS", "body").split(",")
                        if c.strip()]
+# Inner-loop strategy: "parallel" (default) = best-of-N candidates raced concurrently — wall-clock
+# is a few model calls end-to-end; "gepa" = the sequential reflective evolution loop (slower,
+# refines candidates against observed failures — better on mature skills with small headroom).
+OPTIMIZE_STRATEGY = os.environ.get("OPTIMIZE_STRATEGY", "parallel")
+
+EVAL_CACHE_DIR = Path(__file__).resolve().parent.parent / "runs" / "eval-cache"
+
+
+def _champion_cache_key(revision: str, holdout: list[dict]) -> str:
+    """Champion holdout results are pure functions of (champion revision, holdout tasks, serving
+    model, judge) — cache them so repeat optimize runs only pay for the challenger's side."""
+    import hashlib
+    payload = json.dumps({"v": 1, "revision": revision, "holdout": holdout, "model": agent_model(),
+                          "judge": os.environ.get("JUDGE_MODELS") or os.environ.get("JUDGE_MODEL", "")},
+                         sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def optimize_split(champion: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
@@ -240,7 +257,8 @@ def _run_variant(dataset, variant: str, agent, tasks: list[dict]):
         return answer
 
     def judge_evaluator(*, input, output, **kwargs):
-        j = judge(input["task"], input["rubric"], str(output), check=input.get("check"))
+        j = judge(input["task"], input["rubric"], str(output), check=input.get("check"),
+                  deliverable=input.get("deliverable"))
         scores_by_task[input["task"]] = j["score"]
         return Evaluation(name="judge_score", value=j["score"], comment=j["feedback"])
 
@@ -259,7 +277,8 @@ def _run_variant(dataset, variant: str, agent, tasks: list[dict]):
 
 
 def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
-           skip_gepa: bool = False, challenger_file: str | None = None, log=print) -> dict:
+           skip_gepa: bool = False, challenger_file: str | None = None,
+           strategy: str | None = None, candidates: int | None = None, log=print) -> dict:
     from langfuse import get_client
 
     usage_ledger.reset()
@@ -276,8 +295,8 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
         everything = read_components(skill_dir)
         champion.update({k: everything[k] for k in file_components if k in everything})
 
-    # 1) GEPA: evolve the full skill (all components) on the TRAIN tasks (judge feedback -> reflection).
-    if challenger_file:  # resume: reuse a checkpointed GEPA result, skip straight to the A/B
+    # 1) Inner loop: evolve the mutable components into a challenger on the TRAIN tasks.
+    if challenger_file:  # resume: reuse a checkpointed inner-loop result, skip straight to the A/B
         ckpt = json.loads(Path(challenger_file).read_text())
         challenger, seed_score, best_score = ckpt["components"], ckpt["seed_score"], ckpt["best_score"]
         budget = ckpt.get("budget", budget)
@@ -285,27 +304,35 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
         challenger, seed_score, best_score = champion, 0.0, 0.0
     else:
         seed, frozen = optimize_split(champion)
-        log(f"[gepa] optimizing '{skill}' (components: {sorted(seed)}; frozen: {sorted(frozen)}) "
-            f"on {len(train)} train tasks (budget {budget} metric calls)…")
-        from .gepa_loop import run_gepa
         # rollouts see the frozen description (get_skill serves it) but not frozen files — those
         # are neither mutated nor measured, and pasting them in would only inflate rollout cost
         rollout_frozen = {k: v for k, v in frozen.items() if k == "description"}
-        best, seed_score, best_score = run_gepa(seed, train, max_metric_calls=budget,
-                                                frozen=rollout_frozen)
+        effective = (strategy or OPTIMIZE_STRATEGY).lower()
+        if effective == "gepa":
+            log(f"[gepa] optimizing '{skill}' (components: {sorted(seed)}; frozen: {sorted(frozen)}) "
+                f"on {len(train)} train tasks (budget {budget} metric calls)…")
+            from .gepa_loop import run_gepa
+            best, seed_score, best_score = run_gepa(seed, train, max_metric_calls=budget,
+                                                    frozen=rollout_frozen)
+        else:
+            log(f"[bestofn] optimizing '{skill}' (components: {sorted(seed)}; frozen: "
+                f"{sorted(frozen)}) on {len(train)} train tasks (parallel best-of-N + racing)…")
+            from .bestofn import run_bestofn
+            best, seed_score, best_score = run_bestofn(seed, train, frozen=rollout_frozen,
+                                                       candidates=candidates, log=log)
         challenger = {**champion, **best}
-        log(f"[gepa] inner-loop score: seed {seed_score:.3f} -> best {best_score:.3f}")
+        log(f"[opt] inner-loop score: seed {seed_score:.3f} -> best {best_score:.3f}")
         changed = [k for k in champion if challenger.get(k, "").strip() != champion[k].strip()]
         if not changed:
-            log("[gepa] no better candidate found — nothing to A/B.")
+            log("[opt] no better candidate found — nothing to A/B.")
             return {"skill": skill, "improved": False}
-        log(f"[gepa] components changed: {changed}")
-        # checkpoint the GEPA result so an A/B failure doesn't cost the whole loop
+        log(f"[opt] components changed: {changed}")
+        # checkpoint the inner-loop result so an A/B failure doesn't cost the whole loop
         ckpt = Path(__file__).resolve().parent.parent / "runs" / f"challenger-{skill}.json"
         ckpt.parent.mkdir(parents=True, exist_ok=True)
         ckpt.write_text(json.dumps({"components": challenger, "seed_score": seed_score,
                                     "best_score": best_score, "budget": budget}, indent=2))
-        log(f"[gepa] challenger checkpointed to {ckpt} (resume with --challenger-file)")
+        log(f"[opt] challenger checkpointed to {ckpt} (resume with --challenger-file)")
 
     # 2) A/B through the full deep agent on the HELD-OUT tasks (the promotion gate — the optimizer
     #    never saw these), one Langfuse dataset run per variant.
@@ -319,7 +346,16 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
 
     ts = int(time.time())
     results = {}
+    champion_skill = next(item for item in load_skills() if item.name == skill)
+    cache_path = EVAL_CACHE_DIR / f"{skill}-{_champion_cache_key(champion_skill.revision, holdout)}.json"
     for variant, comps in [("champion", champion), ("challenger", challenger)]:
+        if variant == "champion" and cache_path.exists():
+            # the champion side is deterministic in (revision, holdout, model, judge) up to judge
+            # noise — reuse the recorded run instead of re-spending the full agent + judge on it
+            results[variant] = json.loads(cache_path.read_text())
+            log(f"[ab] champion: holdout results reused from cache (revision unchanged) — "
+                f"mean {results[variant]['mean']:.3f}  {results[variant]['scores']}")
+            continue
         run_name = f"{variant}-{ts}"
         log(f"[ab] running variant '{run_name}' through the deep agent ({len(holdout)} held-out tasks)…")
         # Guaranteed serving: the variant body is injected into the instructions (see
@@ -337,6 +373,9 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
             },
             "behavior": behaviors,
         }
+        if variant == "champion":
+            EVAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(results[variant]))
         r = results[variant]
         log(f"[ab] {variant}: mean judge score {r['mean']:.3f}  {scores}")
         log(f"[ab] {variant}: tokens/task in {r['tokens']['mean_input']:.0f} (per-task {r['tokens']['input']})"
@@ -382,7 +421,6 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
         f"({ch_tok['mean_input'] - c_tok['mean_input']:+.0f}) (informational)")
 
     summary["optimization_usage"] = usage_ledger.report()
-    champion_skill = next(item for item in load_skills() if item.name == skill)
     evidence = build_evidence(summary, champion_skill.revision,
                               skill_revision(Path(champion_skill.root), challenger))
     evidence_root = Path(__file__).resolve().parent.parent / "runs" / "evidence" / skill / str(ts)
@@ -423,9 +461,15 @@ if __name__ == "__main__":
     passes.add_argument("--scripts", action="store_true",
                         help="not yet supported — needs execution-grounded evals")
     ap.add_argument("--promote", action="store_true", help="promote immediately if challenger wins")
-    ap.add_argument("--budget", type=int, default=60, help="GEPA max metric calls")
+    ap.add_argument("--gepa", action="store_true",
+                    help="use the sequential GEPA reflective loop instead of the default "
+                         "parallel best-of-N (also: OPTIMIZE_STRATEGY=gepa)")
+    ap.add_argument("--candidates", type=int, default=None,
+                    help="parallel strategy: candidates to author and race (default 5; "
+                         "also OPTIMIZE_CANDIDATES)")
+    ap.add_argument("--budget", type=int, default=60, help="GEPA max metric calls (--gepa only)")
     ap.add_argument("--skip-gepa", action="store_true", help="debug: A/B champion vs itself")
-    ap.add_argument("--challenger-file", help="reuse a checkpointed GEPA result, skip to the A/B")
+    ap.add_argument("--challenger-file", help="reuse a checkpointed inner-loop result, skip to the A/B")
     args = ap.parse_args()
     if args.scripts:
         raise SystemExit(
@@ -442,4 +486,5 @@ if __name__ == "__main__":
         run_routing(args.skill, budget=args.budget)
     else:
         run_ab(args.skill, promote_now=args.promote, budget=args.budget,
-               skip_gepa=args.skip_gepa, challenger_file=args.challenger_file)
+               skip_gepa=args.skip_gepa, challenger_file=args.challenger_file,
+               strategy="gepa" if args.gepa else None, candidates=args.candidates)

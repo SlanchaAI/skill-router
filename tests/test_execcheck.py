@@ -12,6 +12,18 @@ def test_expects_code_gates_on_task_shape():
     assert not E.expects_code("Plan a low-FODMAP dinner menu", "cover food selection and portions")
 
 
+def test_expects_code_exempts_spreadsheet_formula_tasks():
+    # regression: "the IF function" / "error code" in formula rubrics used to demand a Python
+    # block, zeroing correct formula answers (and teaching the optimizer to game the check)
+    assert not E.expects_code("Write an Excel formula for cell C2",
+                              "Must use the IF function. Must return Pass or Fail.")
+    assert not E.expects_code("Write a Google Sheets formula that divides A2 by B2",
+                              'should return "Division Error" instead of an error code')
+    # but formula-adjacent tasks that explicitly ask for Python still expect code
+    assert E.expects_code("Convert this xlsx spreadsheet to CSV and re-save it with openpyxl", "")
+    assert E.expects_code("Write a Python script that evaluates an Excel formula", "")
+
+
 def test_check_flags_missing_code():
     assert E.check("Here's how it works: first you open the file, then...")["status"] == "no_code"
 
@@ -349,3 +361,40 @@ def test_docker_sandbox_garbage_output_fails_closed(monkeypatch):
     assert E.check_with_fixture(ANSWER_OK, "", "")["status"] == "inconclusive"
     _fake_docker(monkeypatch, stdout="")
     assert E.check("```python\nprint(1)\n```")["status"] == "runtime_error"
+
+
+def test_judge_note_stays_silent_for_formula_tasks():
+    # a correct formula answer must not be branded "no runnable Python" (regression)
+    note = E.judge_note("Use `=IFERROR(A2/B2, \"Division Error\")`",
+                        "Write an Excel formula that divides A2 by B2",
+                        'return "Division Error" instead of an error code')
+    assert note == ""
+
+
+def test_judge_note_still_fires_for_python_tasks():
+    note = E.judge_note("You could write a small script for this.",
+                        "Write a Python script to merge PDFs", "")
+    assert "OBJECTIVE CODE CHECK — FAILED" in note
+
+
+def test_expects_code_exempts_shell_command_tasks():
+    # regression: a rubric quoting `docker ... python -m pytest` mentions "python", but the
+    # deliverable is a shell command — demanding a Python block zeroed correct answers
+    assert not E.expects_code("How do I run the test suite?",
+                              'Must give `docker run --rm -v "$PWD:/app" ingot-mcp python -m pytest tests -q`')
+    assert not E.expects_code("Turn off the sandbox", "set the environment variable EXEC_SANDBOX=off")
+    # but an explicit Python ask alongside CLI context still expects code
+    assert E.expects_code("Write a Python script that shells out to docker to list containers", "")
+
+
+def test_deliverable_override_skips_static_check():
+    # eval authors can declare the answer kind; non-code deliverables silence the Python check
+    # even when heuristic keywords ("theme() function") would otherwise fire
+    assert E.judge_note("color: var(--color-brand);", "use my theme's brand color in CSS",
+                        "no theme() function is needed", deliverable="css") == ""
+    assert E.judge_note("forgectl release deploy a/b --ring 1", "deploy it",
+                        "must give runnable code... just kidding, the exact command",
+                        deliverable="command") == ""
+    # deliverable: python keeps the check active
+    note = E.judge_note("no code here", "Write Python to merge PDFs", "", deliverable="python")
+    assert "OBJECTIVE CODE CHECK — FAILED" in note

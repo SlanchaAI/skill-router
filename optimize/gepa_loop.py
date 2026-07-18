@@ -76,7 +76,7 @@ class SkillAdapter:
             usage_ledger.add("rollout", getattr(msg, "usage_metadata", None))
             answer = msg.content
         j = judge(ex["task"], ex["rubric"], answer, reference=ex.get("reference", ""),
-                  check=ex.get("check"))
+                  check=ex.get("check"), deliverable=ex.get("deliverable"))
         return answer, j["score"], {"task": ex["task"], "output": answer,
                                     "feedback": j["feedback"], "dimensions": j["dimensions"]}
 

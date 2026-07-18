@@ -1,5 +1,7 @@
 import asyncio
 
+import optimize.promote as promotion
+
 from mcp_server import server
 from mcp_server.server import STATE, get_skill, mcp, route_and_load
 
@@ -24,24 +26,50 @@ def test_route_and_load_is_additive_to_existing_mcp_tools():
     }
 
 
-def test_create_skill_is_disabled_by_default(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "SKILLS_DIR", tmp_path)
-    monkeypatch.setattr(server, "ENABLE_AGENT_SKILL_WRITES", False)
-    result = server.create_skill("new-skill", "Use this for new work.", "Do the work.")
-    assert "disabled" in result.lower()
-    assert not (tmp_path / "new-skill").exists()
-
-
-def test_create_skill_opt_in_preserves_live_write(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "SKILLS_DIR", tmp_path)
-    monkeypatch.setattr(server, "ENABLE_AGENT_SKILL_WRITES", True)
+def test_create_skill_queues_candidate_without_activation(tmp_path, monkeypatch):
+    skills = tmp_path / "skills"
+    monkeypatch.setattr(server, "SKILLS_DIR", skills)
+    monkeypatch.setattr(promotion, "PENDING_DIR", tmp_path / "pending")
     monkeypatch.setattr(server.STATE, "refresh_if_changed", lambda: None)
     monkeypatch.setattr(server.STATE, "by_name", {})
     monkeypatch.setattr(server.STATE.router, "nearest", lambda _: (None, 0.0))
-    monkeypatch.setattr(server.STATE, "reload", lambda: 1)
+    monkeypatch.setattr(
+        server.STATE,
+        "reload",
+        lambda: (_ for _ in ()).throw(AssertionError("candidate creation must not reload")),
+    )
+
     result = server.create_skill("new-skill", "Use this for new work.", "Do the work.")
-    assert "Created skill" in result
-    assert (tmp_path / "new-skill" / "SKILL.md").exists()
+
+    assert "awaiting human approval" in result
+    assert not (skills / "new-skill").exists()
+    assert promotion.load_pending("new-skill") == {
+        "kind": "creation",
+        "skill": "new-skill",
+        "champion_components": {"description": "", "body": ""},
+        "challenger_components": {
+            "description": "Use this for new work.",
+            "body": "Do the work.",
+        },
+        "changed_components": ["description", "body"],
+        "gate": {"promotable": True, "blocked": [], "warnings": []},
+        "source": "agent",
+    }
+
+
+def test_create_skill_rejects_duplicate_pending_candidate(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "SKILLS_DIR", tmp_path / "skills")
+    monkeypatch.setattr(promotion, "PENDING_DIR", tmp_path / "pending")
+    monkeypatch.setattr(server.STATE, "refresh_if_changed", lambda: None)
+    monkeypatch.setattr(server.STATE, "by_name", {})
+    monkeypatch.setattr(server.STATE.router, "nearest", lambda _: (None, 0.0))
+
+    first = server.create_skill("new-skill", "First description.", "First body.")
+    second = server.create_skill("new-skill", "Second description.", "Second body.")
+
+    assert "awaiting human approval" in first
+    assert "already awaiting human review" in second
+    assert promotion.load_pending("new-skill")["challenger_components"]["body"] == "First body."
 
 
 def test_route_refreshes_after_external_skill_promotion(tmp_path, monkeypatch):

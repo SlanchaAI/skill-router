@@ -5,10 +5,10 @@ import os
 import threading
 
 from fastmcp import FastMCP
+from optimize.promote import load_pending, save_pending
 
 from . import guard_model, safety
-from .registry import (SKILLS_DIR, configured_roots, load_skills, name_problem, slugify,
-                       write_skill_md)
+from .registry import SKILLS_DIR, configured_roots, load_skills, name_problem, slugify
 from .router import Router
 
 MIN_SCORE = float(os.environ.get("MIN_SCORE", "0.65"))
@@ -19,9 +19,6 @@ PORT = int(os.environ.get("PORT", "8000"))
 # not listen on the network. The compose mcp service sets HOST=0.0.0.0 (required for Docker port
 # publishing); host access stays localhost-only via the 127.0.0.1 port mapping.
 HOST = os.environ.get("HOST", "127.0.0.1")
-ENABLE_AGENT_SKILL_WRITES = os.environ.get("ENABLE_AGENT_SKILL_WRITES", "").lower() in {
-    "1", "true", "yes", "on",
-}
 
 
 class _State:
@@ -96,10 +93,7 @@ def get_skill(name: str) -> str:
 
 @mcp.tool()
 def create_skill(name: str, description: str, body: str) -> str:
-    """Create and activate a skill when trusted-local agent writes are explicitly enabled."""
-    if not ENABLE_AGENT_SKILL_WRITES:
-        return ("Agent-authored skill writes are disabled. Set ENABLE_AGENT_SKILL_WRITES=1 only "
-                "in a trusted local environment, or add the skill through human review.")
+    """Author a skill candidate for human review without activating it."""
     STATE.refresh_if_changed()
     slug = slugify(name)
     problem = name_problem(slug)
@@ -107,6 +101,8 @@ def create_skill(name: str, description: str, body: str) -> str:
         return f"Invalid skill name '{name}': {problem}."
     if slug in STATE.by_name or (SKILLS_DIR / slug).exists():
         return f"Skill '{slug}' already exists — improve it via the optimizer instead."
+    if load_pending(slug):
+        return f"Skill '{slug}' is already awaiting human review."
     problems = safety.scan(description, body)
     ml_flag = guard_model.check(f"{description}\n{body}")
     if ml_flag:
@@ -118,13 +114,17 @@ def create_skill(name: str, description: str, body: str) -> str:
         return (f"Skill '{slug}' rejected: description too similar to existing skill "
                 f"'{shadowed}' (cosine {score:.2f}) — would shadow its routing. Refine it or "
                 f"improve '{shadowed}' via the optimizer instead.")
-    destination = SKILLS_DIR / slug
-    destination.mkdir(parents=True)
-    write_skill_md(destination / "SKILL.md",
-                   {"name": slug, "description": description, "source": "agent"}, body)
-    count = STATE.reload()
-    print(f"[ingot] created skill '{slug}' ({count} skills total)", flush=True)
-    return f"Created skill '{slug}' and reloaded the router ({count} skills)."
+    save_pending(slug, {
+        "kind": "creation",
+        "skill": slug,
+        "champion_components": {"description": "", "body": ""},
+        "challenger_components": {"description": description, "body": body},
+        "changed_components": ["description", "body"],
+        "gate": {"promotable": True, "blocked": [], "warnings": []},
+        "source": "agent",
+    })
+    print(f"[ingot] queued skill candidate '{slug}' for human approval", flush=True)
+    return f"Created candidate '{slug}' — awaiting human approval at http://localhost:8080."
 
 
 @mcp.tool()
@@ -142,8 +142,8 @@ def route_and_load(task: str, harness: str, cwd: str, available_tools: list[str]
     The result's `novel` flag is the weak/strong routing signal for the calling harness:
     a `match` -> follow `skill_body` (a weak/cheap model suffices); no match with `novel` false ->
     related skills exist (see suggest_skills) to compose or extend; `novel` true -> nothing even
-    related, so serve with your strong model and use a human-reviewed workflow by default; the
-    caller may attempt create_skill when trusted-local agent writes are explicitly enabled."""
+    related, so serve with your strong model; the caller may use create_skill to queue a candidate
+    for human review."""
     STATE.refresh_if_changed()
     return STATE.router.route(task, harness, cwd, available_tools or [], available_mcps or [],
                               min_score=MIN_SCORE, related_score=RELATED_SCORE)

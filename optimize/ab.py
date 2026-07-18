@@ -2,9 +2,9 @@
 challenger, then champion and challenger run through the full agent with a local `route_and_load`.
 Each variant is a
 Langfuse dataset run (side-by-side in the UI); the result is written to runs/pending/<skill>.json for
-approval in the UI (or promoted directly with --promote).
+approval in the UI.
 
-Usage: python -m optimize.ab <skill> [--promote] [--budget N] [--skip-gepa]
+Usage: python -m optimize.ab <skill> [--budget N] [--skip-gepa]
 """
 import argparse
 import asyncio
@@ -24,7 +24,7 @@ from mcp_server.registry import SKILLS_DIR, load_skills, optimizable_components,
 from . import agent_model
 from . import usage as usage_ledger
 from .judge import judge
-from .promote import promote, save_pending
+from .promote import save_pending
 from .evidence import build_evidence, write_evidence
 
 TASKS_DIR = Path(__file__).resolve().parent / "tasks"
@@ -258,8 +258,8 @@ def _run_variant(dataset, variant: str, agent, tasks: list[dict]):
             [behavior_by_task.get(t["task"], []) for t in tasks])
 
 
-def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
-           skip_gepa: bool = False, challenger_file: str | None = None, log=print) -> dict:
+def run_ab(skill: str, budget: int = 60, skip_gepa: bool = False,
+           challenger_file: str | None = None, log=print) -> dict:
     from langfuse import get_client
 
     usage_ledger.reset()
@@ -401,8 +401,6 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
         log(f"[ab] ⚠ {'; '.join(warnings)}")
     if not wins:
         log("[ab] champion holds — nothing to promote.")
-    elif promote_now and promotable:
-        log("[ab] --promote: " + promote(skill, challenger, evidence))
     elif promotable:
         p = save_pending(skill, summary)
         log(f"[ab] pending approval written to {p} — review + promote at http://localhost:8080")
@@ -422,7 +420,6 @@ if __name__ == "__main__":
                         help="routing pass over the description (embedding-scored inner loop)")
     passes.add_argument("--scripts", action="store_true",
                         help="not yet supported — needs execution-grounded evals")
-    ap.add_argument("--promote", action="store_true", help="promote immediately if challenger wins")
     ap.add_argument("--budget", type=int, default=60, help="GEPA max metric calls")
     ap.add_argument("--skip-gepa", action="store_true", help="debug: A/B champion vs itself")
     ap.add_argument("--challenger-file", help="reuse a checkpointed GEPA result, skip to the A/B")
@@ -441,5 +438,5 @@ if __name__ == "__main__":
         from .routing import run_routing
         run_routing(args.skill, budget=args.budget)
     else:
-        run_ab(args.skill, promote_now=args.promote, budget=args.budget,
-               skip_gepa=args.skip_gepa, challenger_file=args.challenger_file)
+        run_ab(args.skill, budget=args.budget, skip_gepa=args.skip_gepa,
+               challenger_file=args.challenger_file)

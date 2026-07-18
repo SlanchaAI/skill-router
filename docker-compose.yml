@@ -13,7 +13,6 @@ services:
     environment:
       HOST: 0.0.0.0                    # bind the container interface (needed for the port publish);
                                        # host access stays localhost-only via the 127.0.0.1 mapping
-      ENABLE_AGENT_SKILL_WRITES: ${ENABLE_AGENT_SKILL_WRITES:-0}
     ports:
       - "127.0.0.1:8000:8000"          # MCP streamable-HTTP — localhost only (see README: Network exposure)
     volumes:
@@ -104,7 +103,7 @@ services:
         condition: service_healthy
     profiles: ["optimize"]
 
-  # Live canary promotion (ε-split + Thompson gate): `docker compose run --rm optimize-canary pdf`
+  # Live canary recommendation (ε-split + Thompson gate): `docker compose run --rm optimize-canary pdf`
   optimize-canary:
     build: .
     entrypoint: ["python", "-m", "optimize.canary"]

@@ -1,9 +1,20 @@
 """Unit tests for optimizer pure-logic (no network/LLM): the promotion gate and the
 multi-dimensional judge's failure parsing."""
+import inspect
+
 from optimize import ab as ab_mod
 from optimize import judge as judge_mod
 from optimize.ab import body_retention, promotion_gate, retention_warnings
 from optimize.judge import DIMENSIONS, failed_dimensions
+
+
+def test_optimizer_has_no_activation_control():
+    # the canary module is deleted outright on this branch, the strongest form of "no
+    # activation control"; the remaining assertions cover the surviving surfaces
+    from optimize import promote as promotion
+
+    assert "promote_now" not in inspect.signature(ab_mod.run_ab).parameters
+    assert not hasattr(promotion, "promote")
 
 
 def test_ensemble_judge_averages_score_and_majority_votes_dimensions(monkeypatch):

@@ -360,19 +360,29 @@ request. Only two frontmatter fields matter: `name` (a slug) and `description` (
 trigger — write it "pushy", starting with "Use this skill when…", since under-triggering is the
 common failure; and as step 7 showed, the description pass can fix it for you afterwards).
 
-**Let the agent write one** — when `suggest_skills` returns an empty list (nothing even related),
-the request escalates to `STRONG_MODEL` (defaults to `GEPA_MODEL`, the same teacher that rewrites
-skills offline): it solves the task and persists what it learned via the `create_skill` MCP tool.
-The new skill is distilled from a strong solution, and the next similar request routes to it on the
-cheap `AGENT_MODEL`:
+**Let the agent propose one (trusted-local opt-in)** — when `suggest_skills` returns an empty list
+(nothing even related), the request escalates to `STRONG_MODEL` (defaults to `GEPA_MODEL`, the same
+teacher that rewrites skills offline). It solves the task and attempts to persist what it learned
+through `create_skill`. Agent-authored writes are disabled by default; enable them only in a trusted
+local environment:
+
+```bash
+ENABLE_AGENT_SKILL_WRITES=1 docker compose up
+```
+
+With that flag enabled, an accepted skill goes live immediately without human approval, and the
+next similar request can route to it on the cheap `AGENT_MODEL`:
 
 ```bash
 docker compose run --rm agent "Plan a strict low-FODMAP weekly dinner menu for two people"
 # PROPOSED SKILLS (MCP suggest_skills):            <- empty: no skill covers this
-# SERVING MODEL: accounts/fireworks/models/glm-5p2 (strong — no skill matched, will author one)
+# SERVING MODEL: accounts/fireworks/models/glm-5p2 (strong — no skill matched)
 # ... solves the task ...
 # mcp log: [ingot] created skill 'low-fodmap-meal-planning' — live immediately
 ```
+
+Without the flag, the answer still completes and `create_skill` returns a refusal. Add the proposed
+skill manually or review it through your own workflow before placing it in `skills/`.
 
 How often this fires is governed by `RELATED_SCORE`: the nearest-skill similarity floor rises with
 library size (with ~70 skills even unrelated tasks score ≈0.5 against their closest neighbor), so
@@ -462,7 +472,8 @@ Set in `.env` (never committed):
 | `MODEL_BASE_URL` / `MODEL_API_KEY` | `BASE_URL` / `API_KEY` | serving-role-only overrides (agent runs, A/B agents, GEPA rollouts) for hybrid setups |
 | `OPENROUTER_PROVIDERS` | — | OpenRouter only: optional provider allowlist (e.g. `fireworks,deepinfra` → `provider.only`) — composes with ZDR, trades pool resilience for vendor predictability; pin/model conflicts are caught at startup with the list of providers that do serve each model |
 | `GEPA_MODEL` | `z-ai/glm-5.2` | GEPA's reflection LM (the skill author) |
-| `STRONG_MODEL` | `GEPA_MODEL` | serves novel requests: when the router finds no skill at all, the agent runs on this model instead of `AGENT_MODEL` (weak/strong split at serving time), solves the task, and authors the new skill — so persisted skills are distilled from a strong solution. Uses the `BASE_URL` endpoint |
+| `STRONG_MODEL` | `GEPA_MODEL` | serves novel requests: when the router finds no skill at all, the agent runs on this model instead of `AGENT_MODEL` (weak/strong split at serving time) and solves the task. It attempts optional authoring only when `ENABLE_AGENT_SKILL_WRITES` is enabled. Uses the `BASE_URL` endpoint |
+| `ENABLE_AGENT_SKILL_WRITES` | `0` | trusted-local opt-in for `create_skill`; accepted skills activate immediately without human approval |
 | `JUDGE_MODEL` | `google/gemini-2.5-flash` | the LLM judge — must differ from `GEPA_MODEL` (anti reward-hacking) |
 | `MIN_SCORE` | `0.65` | at/above → routable match; below → `related` band or novel |
 | `RELATED_SCORE` | `0.45` | floor of the `related` (compose/extend) band below `MIN_SCORE`; below it a task is *novel* (weak/strong escalation) |
@@ -492,12 +503,13 @@ the A/B always run on the model the skills will actually serve.
   - `suggest_skills(task, k)` — routable matches by embedding similarity (CPU [fastembed](https://github.com/qdrant/fastembed), no GPU); if none, returns near-misses flagged `related` (compose-awareness); empty = truly novel. (`list_skills()` exists for debug/UI but is kept out of the agent's toolset — the agent routes, it doesn't scan.)
   - `get_skill(name)` — the full SKILL.md to load; the header line carries the content-hash
     revision (`# Skill: <name>@<revision>`) for trace attribution
-  - `create_skill(name, description, body)` — persist a new agent-authored skill (never overwrites)
+  - `create_skill(name, description, body)` — persist a new agent-authored skill when
+    `ENABLE_AGENT_SKILL_WRITES=1` (default off; never overwrites)
   - `reload_skills()` — hot reload after promotion/creation (or `docker compose restart mcp`)
   - `route_and_load(task, harness, cwd, available_tools, available_mcps)` — optional one-round-trip
     selection for external clients; returns one compatible skill body or no match, plus a `novel`
     flag — the weak/strong escalation signal (see [Bring your own agent](#bring-your-own-agent-mcp-only))
-- **`agent/run.py`** — [deepagents](https://github.com/langchain-ai/deepagents) LangGraph agent wired to those tools via `langchain-mcp-adapters`, traced to Langfuse (tagged with the routed skill and `revision=<name>@<rev>`). Serves routed tasks on the weak `AGENT_MODEL` and escalates truly novel tasks (empty `suggest_skills`) to `STRONG_MODEL`, which authors the new skill.
+- **`agent/run.py`** — [deepagents](https://github.com/langchain-ai/deepagents) LangGraph agent wired to those tools via `langchain-mcp-adapters`, traced to Langfuse (tagged with the routed skill and `revision=<name>@<rev>`). Serves routed tasks on the weak `AGENT_MODEL` and escalates truly novel tasks (empty `suggest_skills`) to `STRONG_MODEL`; persistence remains a separate, default-off opt-in.
 - **`skills/<name>/SKILL.md`** — YAML `description` is the routing key; the body is what the agent loads.
 - **`optimize/`** — success/failure mining over real traces (`mine.py`), multi-dimensional LLM judge (`judge.py`), GEPA loop over the skill description/body with diagnose→minimal-edit reflection (`gepa_loop.py`), A/B + revisioned evidence (`ab.py`), live **canary** promotion (`canary.py`), snapshot/staged promotion with rollback (`promote.py`), per-role token ledger (`usage.py`). A/B agents get mutation tools stripped, so evals can't alter the library. Promotion records the exact skill revisions plus `evidence.json`/`EVIDENCE.md`, and refuses stale or mismatched revisions. The mining + categorized-failure ideas are borrowed from [SkillForge (Liu et al., arXiv:2604.08618)](https://arxiv.org/abs/2604.08618).
 - **`ui/`** — FastAPI approval UI (one HTML page, no build step).
@@ -512,9 +524,9 @@ branch:
 - **`match`** — follow `skill_body`; a weak/cheap model suffices, the skill carries the method.
 - **no match, `novel: false`** — related skills exist: call `suggest_skills` and compose or extend
   the closest instead of authoring a duplicate.
-- **`novel: true`** — nothing even related. Serve the request with your strong model and have it
-  persist its solution as a reusable skill via `create_skill` — the library grows exactly where
-  routing failed, and the next similar request routes to the new skill on the weak model.
+- **`novel: true`** — nothing even related. Serve the request with your strong model. Either add
+  the reusable skill through human review, or explicitly enable trusted-local writes and call
+  `create_skill`; only the latter activates it immediately.
 
 That three-way branch is the weak/strong serving split; the bundled agent implements the same
 policy with `AGENT_MODEL` (weak) and `STRONG_MODEL` (strong, defaults to `GEPA_MODEL`). To keep the
@@ -569,8 +581,10 @@ goal is proportionate guardrails plus a small, well-defended write surface.
 
 Write paths, and what guards each:
 
-- **`create_skill` (agent-authored, goes live with no human approval)** — the highest-risk path, so
-  it's the most guarded: slug + frontmatter sanitization (`yaml.safe_dump`), never overwrites an
+- **`create_skill` (agent-authored, disabled by default)** — set
+  `ENABLE_AGENT_SKILL_WRITES=1` to opt into this trusted-local path. Accepted content goes live with
+  no human approval, so the path is guarded with slug + frontmatter sanitization
+  (`yaml.safe_dump`), never overwrites an
   existing skill, Agent-Skills-spec name/description limits (≤64-char slug, ≤1024-char description,
   no reserved words, no XML tags), an instruction-override / prompt-injection phrase check
   (`mcp_server/safety.py`), an embedding **collision check** that rejects a description which
@@ -607,7 +621,7 @@ Docker, set `SKILL_GUARD_MODEL` on the `mcp` service in `docker-compose.yml` (mo
 ### Network exposure
 
 **Everything is localhost-only by default, because nothing is authenticated.** The MCP tools
-(including the mutating `create_skill` / `reload_skills`) and the approval UI's endpoints (which can
+(including `reload_skills` and the default-off mutating `create_skill`) and the approval UI's endpoints (which can
 trigger paid optimization runs and promote skills) have no auth of their own — the demo's protection
 is that no service is reachable off the machine:
 
@@ -619,8 +633,9 @@ is that no service is reachable off the machine:
 To make a service reachable from other machines on your network, change its port mapping in
 `docker-compose.yml` from `"127.0.0.1:8000:8000"` to `"8000:8000"` (or bind a specific interface,
 e.g. `"192.168.1.20:8000:8000"`) — same for the UI's `8080`. Do this knowingly: anyone who can reach
-those ports can create skills, promote challengers, and start optimization runs that spend your
-API budget. For anything beyond a trusted LAN, put an authenticating reverse proxy in front.
+those ports can reload skills, promote challengers, and start optimization runs that spend your
+API budget. If agent writes are enabled, they can also create live skills. For anything beyond a
+trusted LAN, put an authenticating reverse proxy in front.
 
 What is deliberately **not** done (and why): we do **not** denylist shell commands, `.env`/credential
 mentions, or `curl … | sh` in skill bodies — legitimate skills routinely contain code, install steps,
@@ -629,7 +644,11 @@ risk is contained operationally instead: **run the agent in a container without 
 sensitive host paths** (this demo's `agent` service mounts nothing sensitive and needs only
 `API_KEY`). For a real deployment, add per-tool sandboxing and treat `create_skill` output
 as untrusted until reviewed. Further reading:
-[OpenAI on prompt injection](https://openai.com/safety/prompt-injections/).
+[OpenAI on prompt injection](https://openai.com/safety/prompt-injections/). See [SECURITY.md](SECURITY.md)
+for reporting and deployment guidance.
+
+Want to improve Ingot? See [CONTRIBUTING.md](CONTRIBUTING.md) for the Docker workflow, test gate,
+and pull-request expectations.
 
 ## Tracing from your own harness (MCP only)
 

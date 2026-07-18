@@ -103,30 +103,6 @@ services:
         condition: service_healthy
     profiles: ["optimize"]
 
-  # Live canary promotion (ε-split + Thompson gate): `docker compose run --rm optimize-canary pdf`
-  optimize-canary:
-    build: .
-    entrypoint: ["python", "-m", "optimize.canary"]
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      MCP_URL: http://mcp:8000/mcp
-      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://langfuse-web:3000}
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local-demo}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local-demo}
-    volumes:
-      - ./skills:/app/skills
-      - ./runs:/app/runs
-      - ./optimize/tasks:/app/optimize/tasks   # auto-drafted eval sets must survive the container
-      - /var/run/docker.sock:/var/run/docker.sock  # EXEC_SANDBOX=docker launches locked-down sandbox containers (README: execution-grounded judging)
-    depends_on:
-      mcp:
-        condition: service_started
-      langfuse-web:
-        condition: service_healthy
-    profiles: ["optimize"]
-
   # Approval UI (review A/B results, promote skills): http://localhost:8080
   ui:
     build: .

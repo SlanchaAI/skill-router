@@ -107,7 +107,7 @@ RESULT:
 The agent asked the router (`suggest_skills`), loaded the top match (`get_skill`), and followed
 it. The `@…` suffix is the skill's content-hash revision, which also lands on the trace as a tag.
 A routed task runs on the cheap `AGENT_MODEL` because the skill carries the method; only truly
-novel tasks escalate to `STRONG_MODEL` (step 11). The tutorial outputs were recorded on Fireworks
+novel tasks escalate to `STRONG_MODEL` (step 10). The tutorial outputs were recorded on Fireworks
 model IDs; the `SERVING MODEL` line shows whatever `AGENT_MODEL` you configure. Open **http://localhost:3100** (login
 `demo@local.dev` / `localdemo123`, local demo literals, not secrets) to see the full trace. To
 trace to an existing project instead, see
@@ -299,29 +299,7 @@ That's the loop: a first-draft skill → real traffic → mined diagnosis → a 
 held-out quality → a description pass gated on routing metrics → human approval at every
 promotion → hot reload.
 
-### 9. (Optional) Promote via a live canary instead
-
-Instead of the offline A/B, a canary serves the challenger to a fraction of live traffic, judges
-each real outcome, and promotes only once the challenger's posterior beats the champion's:
-
-```bash
-docker compose run --rm optimize-canary pdf --epsilon 0.5
-```
-
-```
-[canary] req  4: challenger ok | served champ 2 / chall 2 | P(chall>champ)=0.50
-[canary] req 21: challenger ok | served champ 13 / chall 8 | P(chall>champ)=0.89
-[canary] req 23: champion   ·  | served champ 15 / chall 8 | P(chall>champ)=0.94
-[canary] inconclusive after 24 requests (P=0.91), keeping champion
-```
-
-Each request flips an ε-coin, each arm keeps a Beta posterior, and the run stops early to promote
-(P≥0.95) or reject (P≤0.05). Here the challenger climbed to P=0.91, under the conservative bar, so
-the canary kept the champion. Add `--promote` to auto-promote on a win. Every canary request is
-first-class in Langfuse: tagged with the arm and exact revision, with the judged outcome written
-back as scores.
-
-### 10. (Optional) Put it on autopilot
+### 9. (Optional) Put it on autopilot
 
 One command mines every skill's real traffic for health and optimizes only the ones actually
 failing, leaving every survivor in the approval UI (nothing auto-promotes):
@@ -337,7 +315,7 @@ docker compose run --rm optimize-loop            # all skills with eval sets; ad
 [loop] done. 1 challenger(s) queued for review: ['pdf']
 ```
 
-### 11. Grow the library
+### 10. Grow the library
 
 Three ways the library grows:
 
@@ -403,7 +381,7 @@ Set in `.env` (never committed):
 | `API_KEY` | (none) | bearer token for `BASE_URL`; `OPENROUTER_API_KEY` is the legacy alias. Local `http://` endpoints need no key |
 | `AGENT_MODEL` | `qwen/qwen3.6-27b` | the agent: everything that executes skills, incl. rollouts; `MODEL` is the legacy alias |
 | `MODEL_BASE_URL` / `MODEL_API_KEY` | `BASE_URL` / `API_KEY` | serving-role-only overrides for hybrid setups |
-| `OPENROUTER_PROVIDERS` | (none) | OpenRouter only: optional provider allowlist (e.g. `fireworks,deepinfra`); composes with ZDR |
+| `OPENROUTER_PROVIDERS` | (none) | OpenRouter only: provider priority (e.g. `fireworks,groq`), tried in order; composes with ZDR, and roles no listed provider serves fall back to the open ZDR pool |
 | `GEPA_MODEL` | `z-ai/glm-5.2` | the reflection LM (the skill author) |
 | `STRONG_MODEL` | `GEPA_MODEL` | serves novel requests (no skill matched) and authors the new skill |
 | `JUDGE_MODEL` | `google/gemini-2.5-flash` | the LLM judge; must differ from `GEPA_MODEL` |
@@ -535,8 +513,8 @@ starts, harmlessly unused.
 - **`skills/<name>/SKILL.md`**: YAML `description` is the routing key; the body is what the agent
   loads.
 - **`optimize/`**: trace mining (`mine.py`), multi-dimensional LLM judge (`judge.py`), two
-  inner-loop strategies (`bestofn.py`, `gepa_loop.py`), A/B + revisioned evidence (`ab.py`), live
-  canary (`canary.py`), snapshot promotion with rollback (`promote.py`), token ledger
+  inner-loop strategies (`bestofn.py`, `gepa_loop.py`), A/B + revisioned evidence (`ab.py`),
+  snapshot promotion with rollback (`promote.py`), token ledger
   (`usage.py`). A/B agents get mutation tools stripped. The mining + categorized-failure ideas are
   borrowed from [SkillForge (Liu et al., arXiv:2604.08618)](https://arxiv.org/abs/2604.08618).
 - **`ui/`**: FastAPI approval UI (one HTML page, no build step).

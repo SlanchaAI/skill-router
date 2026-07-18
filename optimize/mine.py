@@ -60,7 +60,7 @@ def _task_answer(inp, ans):
 
 
 def relevant_traces(traces: list[dict], skill: str, k: int = 5) -> list[dict]:
-    """Traces attributable to `skill`: tagged with it (the canary and external harnesses tag the
+    """Traces attributable to `skill`: tagged with it (external harnesses tag the
     routed skill), or ranking it in the embedding top-k for the task text. The rank check is what
     catches traffic the skill *should* have served but didn't route — under-triggering, the common
     routing failure — which a tag filter alone would attribute to the wrong skill."""
@@ -70,6 +70,71 @@ def relevant_traces(traces: list[dict], skill: str, k: int = 5) -> list[dict]:
     return [t for t in traces
             if skill in t.get("tags", [])
             or any(s["name"] == skill for s in router.suggest(t["task"], k=k, min_score=0.0))]
+
+
+def _greedy_pick(difficulty, vecs, k: int) -> list[int]:
+    """Difficulty-weighted greedy max-min: each pick maximizes difficulty x novelty, where
+    novelty is 1 minus the max cosine to anything already picked. Hardest tasks win, but a
+    near-paraphrase of a previous pick gains ~nothing, so picks spread across failure modes
+    (specialize's lesson: judge failure dominates, embedding distance is only the coverage
+    term). Stops when no candidate adds value: aced tasks (difficulty 0) are dead weight."""
+    import numpy as np
+    difficulty = np.asarray(difficulty, dtype=np.float32).copy()
+    picked: list[int] = []
+    novelty = np.ones(len(difficulty), dtype=np.float32)
+    for _ in range(min(k, len(difficulty))):
+        gains = difficulty * novelty
+        i = int(np.argmax(gains))
+        if gains[i] <= 0:
+            break
+        picked.append(i)
+        novelty = np.minimum(novelty, 1.0 - vecs @ vecs[i])
+        difficulty[i] = -1.0
+    return picked
+
+
+MINED_CANDIDATES = 6        # eval candidates surfaced per mine run
+TRAIN_DUP_THRESHOLD = 0.90  # cosine to an existing train task at/above which a candidate leaks
+
+
+def _train_dupes(vecs, skill: str, norm_embed, log):
+    """Boolean mask of candidates that near-duplicate the skill's existing train tasks (the
+    holdout must recombine train, not repeat it), or None when there is no train set."""
+    import yaml
+    from pathlib import Path
+    tasks_file = Path(__file__).resolve().parent / "tasks" / f"{skill}.yaml"
+    if not tasks_file.exists():
+        return None
+    data = yaml.safe_load(tasks_file.read_text()) or {}
+    train_texts = [t["task"] for t in (data.get("train") or data.get("tasks") or [])]
+    if not train_texts:
+        return None
+    dupes = (vecs @ norm_embed(train_texts).T).max(axis=1) >= TRAIN_DUP_THRESHOLD
+    if dupes.any():
+        log(f"[mine] {int(dupes.sum())} candidate(s) dropped as near-duplicates of "
+            f"existing train tasks (leakage guard)")
+    return dupes
+
+
+def _select_candidates(traces: list[dict], scores: list[float], skill: str, log=print) -> list[int]:
+    """Pick eval candidates from mined traces: difficulty from the judge (1 - score), spread
+    by embedding coverage, and never a near-duplicate of the skill's existing train set."""
+    import numpy as np
+    from fastembed import TextEmbedding
+    from mcp_server.router import _MODEL
+
+    embedder = TextEmbedding(model_name=_MODEL)
+
+    def norm_embed(texts):
+        m = np.array(list(embedder.embed(texts)), dtype=np.float32)
+        return m / np.linalg.norm(m, axis=1, keepdims=True)
+
+    vecs = norm_embed([t["task"] for t in traces])
+    difficulty = 1.0 - np.asarray(scores, dtype=np.float32)
+    dupes = _train_dupes(vecs, skill, norm_embed, log)
+    if dupes is not None:
+        difficulty[dupes] = -1.0
+    return _greedy_pick(difficulty, vecs, MINED_CANDIDATES)
 
 
 def mine(skill: str, limit: int = 50, log=print) -> dict:
@@ -107,10 +172,13 @@ def mine(skill: str, limit: int = 50, log=print) -> dict:
         for task, note in examples[d][:2]:
             log(f"        · {task!r} → {note}")
 
-    # the weakest real tasks become mined eval candidates for a targeted optimize run
-    worst = sorted(zip(scores, traces), key=lambda x: x[0])[:6]
-    mined = [{"task": t["task"], "rubric": t["rubric"] or "(reference-free)"} for _, t in worst]
-    log(f"\n[mine] {len(mined)} weakest tasks mined as eval candidates → optimize on these next.")
+    # the weakest real tasks become mined eval candidates for a targeted optimize run,
+    # difficulty-weighted and coverage-spread so they aren't six paraphrases of one failure
+    picked = _select_candidates(traces, scores, skill, log=log)
+    mined = [{"task": traces[i]["task"], "rubric": traces[i]["rubric"] or "(reference-free)"}
+             for i in picked]
+    log(f"\n[mine] {len(mined)} weakest tasks mined as eval candidates (coverage-spread) "
+        f"→ optimize on these next.")
     return {"skill": skill, "traces": n, "mean_score": mean,
             "failure_dimensions": dict(dim_failures), "mined_tasks": mined}
 

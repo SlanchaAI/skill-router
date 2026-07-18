@@ -1,11 +1,8 @@
-"""Unit tests for optimizer pure-logic (no network/LLM): the canary's Thompson decision and the
+"""Unit tests for optimizer pure-logic (no network/LLM): the promotion gate and the
 multi-dimensional judge's failure parsing."""
-import numpy as np
-
 from optimize import ab as ab_mod
 from optimize import judge as judge_mod
 from optimize.ab import body_retention, promotion_gate, retention_warnings
-from optimize.canary import p_challenger_better
 from optimize.judge import DIMENSIONS, failed_dimensions
 
 
@@ -21,24 +18,6 @@ def test_ensemble_judge_averages_score_and_majority_votes_dimensions(monkeypatch
     r = judge_mod.judge("t", "rubric", "ans")
     assert abs(r["score"] - 0.5) < 1e-9
     assert failed_dimensions(r["dimensions"]) == []   # 1/2 is not a majority → not flagged
-
-
-def test_canary_prefers_the_arm_with_more_successes():
-    # challenger 9/10 successes vs champion 1/10 → P(challenger better) ~ 1
-    champ = {"a": 2.0, "b": 10.0}      # 1 success, 9 fail (+1 prior each)
-    chall = {"a": 10.0, "b": 2.0}      # 9 success, 1 fail
-    assert p_challenger_better(champ, chall) > 0.95
-
-
-def test_canary_is_uncertain_with_no_evidence():
-    flat = {"a": 1.0, "b": 1.0}        # uniform prior, no samples
-    assert 0.35 < p_challenger_better(flat, dict(flat)) < 0.65
-
-
-def test_canary_rejects_a_worse_challenger():
-    champ = {"a": 10.0, "b": 2.0}
-    chall = {"a": 2.0, "b": 10.0}
-    assert p_challenger_better(champ, chall) < 0.05
 
 
 def test_gate_passes_a_clean_generalizing_win():
@@ -126,11 +105,22 @@ def test_load_tasks_reads_explicit_train_holdout(tmp_path, monkeypatch):
     assert split == {"kind": "holdout", "leakage": False}
 
 
-def test_canary_probability_is_deterministic_under_seed():
-    champ, chall = {"a": 3.0, "b": 5.0}, {"a": 6.0, "b": 2.0}
-    np.random.seed(0); a = p_challenger_better(champ, chall)
-    np.random.seed(0); b = p_challenger_better(champ, chall)
-    assert a == b  # same seed -> identical estimate (no hidden nondeterminism)
+def test_greedy_pick_spreads_across_failure_modes():
+    import numpy as np
+    from optimize.mine import _greedy_pick
+    # two orthogonal "failure modes", two near-identical tasks in each; hardest overall is
+    # index 0, but the second pick must come from the OTHER mode even though index 1 is harder
+    vecs = np.array([[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]], dtype=np.float32)
+    difficulty = [0.9, 0.8, 0.5, 0.4]
+    assert _greedy_pick(difficulty, vecs, k=2) == [0, 2]
+
+
+def test_greedy_pick_skips_aced_and_excluded_tasks():
+    import numpy as np
+    from optimize.mine import _greedy_pick
+    vecs = np.eye(3, dtype=np.float32)
+    # one real candidate, one aced task (difficulty 0), one excluded (train near-duplicate)
+    assert _greedy_pick([0.7, 0.0, -1.0], vecs, k=3) == [0]
 
 
 def test_length_penalty_is_zero_under_target_and_grows_above():

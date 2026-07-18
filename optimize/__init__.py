@@ -57,6 +57,26 @@ def is_openrouter(url: str) -> bool:
     return "openrouter.ai" in url
 
 
+def langfuse_available() -> bool:
+    """True when the configured Langfuse answers its health endpoint (3s probe). The A/B gate
+    and the miner use this to choose between experiment-logged runs and the local lite path."""
+    import urllib.request
+    base = os.environ.get("LANGFUSE_BASE_URL", "http://langfuse-web:3000").rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base}/api/public/health", timeout=3):
+            return True
+    except OSError:
+        return False
+
+
+def traces_file():
+    """Local JSONL trace store: the zero-infrastructure fallback written by the agent and read
+    by optimize-mine when the Langfuse stack isn't running (one {task, answer, tags} per line)."""
+    from pathlib import Path
+    return Path(os.environ.get("TRACES_FILE") or
+                Path(__file__).resolve().parent.parent / "runs" / "traces.jsonl")
+
+
 def openrouter_extra_body() -> dict:
     """Provider preferences for OpenRouter calls: the hardcoded ZDR policy, plus an optional
     priority list (OPENROUTER_PROVIDERS=fireworks[,groq] -> provider.order): listed providers

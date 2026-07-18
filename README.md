@@ -339,6 +339,23 @@ docker compose run --rm agent "Plan a strict low-FODMAP weekly dinner menu for t
 
 ---
 
+## Lite mode (no tracing stack)
+
+The Langfuse stack (six containers, ClickHouse included) is optional. Start just the router and
+the approval UI:
+
+```bash
+docker compose up mcp ui
+```
+
+The whole improvement loop still works: every agent run appends to a local trace store
+(`runs/traces.jsonl`), `optimize-mine` reads it whenever Langfuse is unreachable, and the A/B
+gate runs its rollouts and judging locally instead of as Langfuse experiments. You lose only the
+trace browser and experiment UI. Pair it with a local model endpoint (see
+[Privacy first](#privacy-first)) for a zero-key, zero-stack setup, and set `MAX_RUN_USD` for a
+hard per-run spend cap on hosted endpoints. Start the full stack later with `docker compose up`
+and everything upgrades in place.
+
 ## Keeping the optimizer honest (anti reward-hacking)
 
 Optimizing against an LLM judge invites the classic failure: the challenger learns to please the
@@ -403,6 +420,8 @@ Set in `.env` (never committed):
 | `SANDBOX_RUNTIME` | (none) | optional container runtime, e.g. `runsc` for gVisor |
 | `SKILL_MAX_DESCRIPTION` | `1024` | `create_skill` description cap (Agent Skills spec) |
 | `SKILL_MAX_BODY` | `40000` | `create_skill` body ceiling (~500 lines) |
+| `TRACES_FILE` | `runs/traces.jsonl` | local JSONL trace store: written by every agent run, read by `optimize-mine` when Langfuse is unreachable, so mining works without the tracing stack |
+| `MAX_RUN_USD` | (none) | hard spend cap per optimize run: the ledger estimates cost from OpenRouter list prices after every call and aborts the run past the cap |
 | `LANGFUSE_BASE_URL` | `http://langfuse-web:3000` | Langfuse endpoint every service traces to and mines from |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | `pk-lf-local-demo` / `sk-lf-local-demo` | project keys; defaults are the bundled stack's local demo literals |
 | `LANGFUSE_PUBLIC_URL` | `http://localhost:3100` | where your browser reaches Langfuse (UI trace links) |

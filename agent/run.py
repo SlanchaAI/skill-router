@@ -69,7 +69,7 @@ def build_agent(tools, instructions: str = INSTRUCTIONS, strong: bool = False):
 def langfuse_config(tags: list[str] | None = None, trace_id: str | None = None) -> dict:
     """ainvoke config with a Langfuse callback if keys are set, else empty. Pass `trace_id`
     (from Langfuse.create_trace_id()) to pin the run to a known trace so callers can attach
-    scores to it afterwards (the canary does this per request)."""
+    scores to it afterwards."""
     if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
         return {}
     from langfuse.langchain import CallbackHandler
@@ -187,8 +187,8 @@ async def main(task: str):
         print(f"\nSERVING MODEL: {MODEL}")
     agent = build_agent(await _connect(), strong=escalate)
     # Trace tags: plain skill name feeds mine.py's relevance filter, revision=name@rev pins the
-    # exact version served, novel marks strong-model escalations — same convention as the canary
-    # and the one documented for external harnesses (README: Tracing from your own harness).
+    # exact version served, novel marks strong-model escalations — the convention documented for
+    # external harnesses (README: Tracing from your own harness).
     tags = ["demo", "novel"] if escalate else ["demo"]
     if routed.get("match"):
         tags.append(routed["match"])

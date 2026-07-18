@@ -13,6 +13,7 @@ import json
 import os
 import statistics
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -153,7 +154,6 @@ def promotion_gate(skill: str, champ_scores: list[float], chall_scores: list[flo
                 reasons.append(f"cross-harness parity {parity['rate']:.3f} < 1.000")
     return (not reasons), reasons
 
-# The canary serves its assigned arm through the same route-shaped tool as production.
 EVAL_INSTRUCTIONS = """You are a deep agent with access to a read-only skill router over MCP.
 For every task, call `route_and_load` once with the full task, harness `codex`, current working
 directory, and available tools/MCPs. Follow `skill_body` when a match is returned. With no match,
@@ -276,6 +276,59 @@ def _run_variant(dataset, variant: str, agent, tasks: list[dict]):
             [behavior_by_task.get(t["task"], []) for t in tasks])
 
 
+def _eval_variants(dataset, ts: int, champion: dict, challenger: dict, holdout: list[dict],
+                   cache_path: Path, log=print) -> dict:
+    """Champion and challenger holdout experiments, concurrently when both run live. The
+    champion side is served from (and recorded to) the revision-keyed eval cache."""
+    def eval_variant(variant: str, comps: dict) -> dict:
+        run_name = f"{variant}-{ts}"
+        log(f"[ab] running variant '{run_name}' through the deep agent ({len(holdout)} held-out tasks)…")
+        # Guaranteed serving: the variant body is injected into the instructions (see
+        # EVAL_SERVE_TEMPLATE) instead of hoping the model fetches it through a tool call.
+        agent = build_agent([], instructions=EVAL_SERVE_TEMPLATE.format(body=comps["body"]))
+        scores, usages, behaviors = _run_variant(dataset, run_name, agent, holdout)
+        return {
+            "run": run_name, "scores": scores,
+            "mean": statistics.mean(scores) if scores else 0.0,  # all items failing must not crash the run
+            "tokens": {
+                "input": [u["input_tokens"] for u in usages],
+                "output": [u["output_tokens"] for u in usages],
+                "mean_input": statistics.mean(u["input_tokens"] for u in usages),
+                "mean_output": statistics.mean(u["output_tokens"] for u in usages),
+            },
+            "behavior": behaviors,
+        }
+
+    results = {}
+    variants = [("champion", champion), ("challenger", challenger)]
+    if cache_path.exists():
+        # the champion side is deterministic in (revision, holdout, model, judge) up to judge
+        # noise — reuse the recorded run instead of re-spending the full agent + judge on it
+        results["champion"] = json.loads(cache_path.read_text())
+        log(f"[ab] champion: holdout results reused from cache (revision unchanged) — "
+            f"mean {results['champion']['mean']:.3f}  {results['champion']['scores']}")
+        variants = [("challenger", challenger)]
+    if len(variants) == 2:
+        # the two variants are independent: run both dataset experiments concurrently, which
+        # halves the cold gate's wall-clock (the cached-champion path is one run anyway)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {v: pool.submit(eval_variant, v, comps) for v, comps in variants}
+            for v, _ in variants:
+                results[v] = futures[v].result()
+    else:
+        for v, comps in variants:
+            results[v] = eval_variant(v, comps)
+    if "champion" in dict(variants):
+        EVAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(results["champion"]))
+    for variant in ("champion", "challenger"):
+        r = results[variant]
+        log(f"[ab] {variant}: mean judge score {r['mean']:.3f}  {r['scores']}")
+        log(f"[ab] {variant}: tokens/task in {r['tokens']['mean_input']:.0f} (per-task {r['tokens']['input']})"
+            f" | out {r['tokens']['mean_output']:.0f} (per-task {r['tokens']['output']})")
+    return results
+
+
 def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
            skip_gepa: bool = False, challenger_file: str | None = None,
            strategy: str | None = None, candidates: int | None = None, log=print) -> dict:
@@ -345,41 +398,9 @@ def run_ab(skill: str, promote_now: bool = False, budget: int = 60,
     dataset = langfuse.get_dataset(ds_name)
 
     ts = int(time.time())
-    results = {}
     champion_skill = next(item for item in load_skills() if item.name == skill)
     cache_path = EVAL_CACHE_DIR / f"{skill}-{_champion_cache_key(champion_skill.revision, holdout)}.json"
-    for variant, comps in [("champion", champion), ("challenger", challenger)]:
-        if variant == "champion" and cache_path.exists():
-            # the champion side is deterministic in (revision, holdout, model, judge) up to judge
-            # noise — reuse the recorded run instead of re-spending the full agent + judge on it
-            results[variant] = json.loads(cache_path.read_text())
-            log(f"[ab] champion: holdout results reused from cache (revision unchanged) — "
-                f"mean {results[variant]['mean']:.3f}  {results[variant]['scores']}")
-            continue
-        run_name = f"{variant}-{ts}"
-        log(f"[ab] running variant '{run_name}' through the deep agent ({len(holdout)} held-out tasks)…")
-        # Guaranteed serving: the variant body is injected into the instructions (see
-        # EVAL_SERVE_TEMPLATE) instead of hoping the model fetches it through a tool call.
-        agent = build_agent([], instructions=EVAL_SERVE_TEMPLATE.format(body=comps["body"]))
-        scores, usages, behaviors = _run_variant(dataset, run_name, agent, holdout)
-        results[variant] = {
-            "run": run_name, "scores": scores,
-            "mean": statistics.mean(scores) if scores else 0.0,  # all items failing must not crash the run
-            "tokens": {
-                "input": [u["input_tokens"] for u in usages],
-                "output": [u["output_tokens"] for u in usages],
-                "mean_input": statistics.mean(u["input_tokens"] for u in usages),
-                "mean_output": statistics.mean(u["output_tokens"] for u in usages),
-            },
-            "behavior": behaviors,
-        }
-        if variant == "champion":
-            EVAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps(results[variant]))
-        r = results[variant]
-        log(f"[ab] {variant}: mean judge score {r['mean']:.3f}  {scores}")
-        log(f"[ab] {variant}: tokens/task in {r['tokens']['mean_input']:.0f} (per-task {r['tokens']['input']})"
-            f" | out {r['tokens']['mean_output']:.0f} (per-task {r['tokens']['output']})")
+    results = _eval_variants(dataset, ts, champion, challenger, holdout, cache_path, log)
     langfuse.flush()
 
     wins = results["challenger"]["mean"] > results["champion"]["mean"]

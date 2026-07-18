@@ -265,7 +265,7 @@ def test_rollouts_serve_the_exact_serving_contract(monkeypatch):
     adapter = G.SkillAdapter(frozen={"description": "trigger words"})
     adapter._llm = FakeLLM()
     monkeypatch.setattr(G, "judge",
-                        lambda t, r, a, reference="", check=None:
+                        lambda t, r, a, reference="", check=None, deliverable=None:
                         {"score": 1.0, "feedback": "f", "dimensions": {}})
     batch = adapter.evaluate([{"task": "t", "rubric": "r"}], {"body": "the rules"})
     assert batch.scores == [1.0]
@@ -279,7 +279,7 @@ def test_agent_rollout_mode_routes_through_the_scaffold(monkeypatch):
     from optimize import gepa_loop as G
     monkeypatch.setattr(G, "GEPA_ROLLOUTS", "agent")
     monkeypatch.setattr(G, "judge",
-                        lambda t, r, a, reference="", check=None:
+                        lambda t, r, a, reference="", check=None, deliverable=None:
                         {"score": 0.5, "feedback": "f", "dimensions": {}})
     seen = {}
 

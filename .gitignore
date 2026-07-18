@@ -22,3 +22,6 @@ __pycache__/
 # fetched skills are optional & not redistributed here (scripts/fetch_skills.sh)
 skills/*
 !skills/.gitkeep
+
+# eval task sets are runtime artifacts (auto-drafted or user-authored), not shipped opinions
+optimize/tasks/*.yaml

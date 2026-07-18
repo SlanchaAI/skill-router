@@ -31,15 +31,32 @@ SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "ingot-optimize")
 SANDBOX_RUNTIME = os.environ.get("SANDBOX_RUNTIME", "")     # e.g. runsc (gVisor), if installed
 _CODE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
 _CODE_KEYWORDS = ("code", "script", "python", "function", "def ", "pypdf", "runnable")
+# Formula-language tasks ("use the IF function", "instead of an error code") trip the keyword net
+# without ever asking for Python; only these unambiguous signals override that exemption.
+_FORMULA_HINTS = ("formula", "excel", "google sheets", "spreadsheet")
+_STRONG_CODE = ("python", "script", "def ", "runnable", "openpyxl", "pandas", "pypdf", ".py")
+# CLI tasks are the same trap from the other direction: a rubric quoting `docker ... python -m
+# pytest` mentions "python", but the deliverable is a shell command, not a Python block.
+_CLI_HINTS = ("docker", "command line", "command-line", "shell command", "terminal",
+              "environment variable", "env var")
+_PY_ASK = ("python script", "python code", "write python", "in python", ".py", "def ",
+           "openpyxl", "pandas", "pypdf")
 # runtime errors that mean "missing fixture / environment", not "the code is wrong"
 _INCONCLUSIVE = ("FileNotFoundError", "PermissionError", "ConnectionError", "URLError", "OSError",
                  "ModuleNotFoundError")
 
 
 def expects_code(task: str, rubric: str = "") -> bool:
-    """Only code-shaped tasks get an execution check (a menu-planning skill shouldn't be 'no code = fail')."""
+    """Only code-shaped tasks get an execution check (a menu-planning skill shouldn't be 'no code =
+    fail'). Spreadsheet-formula tasks are exempt unless they explicitly ask for Python: their rubrics
+    say things like 'must use the IF function', which is a formula, not code — demanding a runnable
+    Python block there zeroes correct answers (and teaches the optimizer to game the check)."""
     text = f"{task}\n{rubric}".lower()
-    return any(k in text for k in _CODE_KEYWORDS)
+    if any(k in text for k in _FORMULA_HINTS) and not any(k in text for k in _STRONG_CODE):
+        return False
+    if any(k in text for k in _CLI_HINTS) and not any(k in text for k in _PY_ASK):
+        return False
+    return any(k in text for k in _CODE_KEYWORDS + _STRONG_CODE)
 
 
 def _python_blocks(answer: str) -> list[str]:
@@ -212,9 +229,16 @@ def check_with_fixture(answer: str, fixture: str = "", assertion: str = "", time
     return {"status": "passed", "detail": "code ran against the fixture and the assertion held"}
 
 
-def judge_note(answer: str, task: str, rubric: str = "", check_spec: dict | None = None) -> str:
+def judge_note(answer: str, task: str, rubric: str = "", check_spec: dict | None = None,
+               deliverable: str | None = None) -> str:
     """A one-line objective fact to hand the judge, or '' when there's nothing decisive to say.
-    Tasks with a `check:` spec get the execution-grounded verdict; others get the static check."""
+    Tasks with a `check:` spec get the execution-grounded verdict; others get the static check.
+    `deliverable` is the eval author's explicit override (task yaml `deliverable:`): any value other
+    than "python"/"code" (e.g. "command", "css", "text") skips the static Python check entirely —
+    the keyword heuristic below has misfired on formulas, CLI commands, and CSS, so eval authors
+    can simply declare what the answer is supposed to be."""
+    if deliverable and deliverable.lower() not in ("python", "code"):
+        return ""
     if check_spec:
         r = check_with_fixture(answer, check_spec.get("fixture", ""), check_spec.get("assert", ""),
                                timeout=int(check_spec.get("timeout", 15)))

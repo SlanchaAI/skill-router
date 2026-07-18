@@ -26,12 +26,17 @@ LF_SK = os.environ.get("LANGFUSE_SECRET_KEY", "sk-lf-local-demo")
 
 
 def fetch_traces(limit: int) -> list[dict]:
-    """Recent traces with a recognizable task input and a non-empty answer output."""
+    """Recent traces with a recognizable task input and a non-empty answer output. Falls back to
+    the local JSONL trace store when Langfuse is unreachable, so mining works without the
+    tracing stack (hobbyist lite mode)."""
     auth = base64.b64encode(f"{LF_PK}:{LF_SK}".encode()).decode()
     req = urllib.request.Request(f"{LF_URL}/api/public/traces?limit={limit}",
                                  headers={"Authorization": f"Basic {auth}"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        data = json.loads(r.read())["data"]
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.loads(r.read())["data"]
+    except OSError as e:
+        return _local_traces(limit, e)
     out = []
     for t in data:
         parsed = _task_answer(t.get("input"), t.get("output"))
@@ -39,6 +44,21 @@ def fetch_traces(limit: int) -> list[dict]:
             task, rubric, answer = parsed
             out.append({"task": task, "rubric": rubric, "answer": answer, "tags": t.get("tags", [])})
     return out
+
+
+def _local_traces(limit: int, err: OSError) -> list[dict]:
+    """The last `limit` records of the local JSONL trace store (written by agent/run.py), in
+    the same shape fetch_traces returns from Langfuse."""
+    from optimize import traces_file
+    path = traces_file()
+    if not path.exists():
+        raise SystemExit(f"Langfuse unreachable ({err}) and no local trace store at {path} — "
+                         "run the agent first to generate traffic.")
+    records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    print(f"[mine] Langfuse unreachable — using local trace store {path} "
+          f"({min(len(records), limit)} of {len(records)} traces)")
+    return [{"task": r["task"], "rubric": r.get("rubric", ""), "answer": r["answer"],
+             "tags": r.get("tags", [])} for r in records[-limit:] if r.get("answer")]
 
 
 def _task_answer(inp, ans):

@@ -3,7 +3,7 @@ import re
 
 import pytest
 
-from optimize.acceptance import evaluate, load_criteria
+from optimize.acceptance import classify, evaluate, load_criteria
 
 
 def test_load_criteria_parses_forbid_and_skips_empty(tmp_path):
@@ -48,3 +48,26 @@ def test_evaluate_clean_answers_pass():
 
 def test_evaluate_no_criteria_is_noop():
     assert evaluate([], ["anything at all"]) == []
+
+
+def test_classify_splits_minority_warning_from_majority_block():
+    crit = [{"id": "no_v3", "forbid": re.compile("V3"), "description": "no V3"}]
+    six = ["V3"] + ["clean"] * 5                  # 1/6 ≈ 17% -> minority
+    block, warn = classify(crit, six, block_rate=0.5)
+    assert block == [] and len(warn) == 1 and "1/6" in warn[0]
+    four = ["V3"] * 4 + ["clean"] * 2             # 4/6 ≈ 67% -> majority
+    block, warn = classify(crit, four, block_rate=0.5)
+    assert warn == [] and len(block) == 1 and "4/6" in block[0]
+
+
+def test_classify_thresholds_are_configurable():
+    crit = [{"id": "no_v3", "forbid": re.compile("V3"), "description": ""}]
+    answers = ["V3"] + ["clean"] * 5              # 1/6
+    # strict (0) -> any violation blocks; pure-warning (>=1) -> never blocks
+    assert classify(crit, answers, block_rate=0.0)[0] and not classify(crit, answers, block_rate=0.0)[1]
+    assert not classify(crit, answers, block_rate=1.0)[0] and classify(crit, answers, block_rate=1.0)[1]
+
+
+def test_classify_clean_answers_have_neither():
+    crit = [{"id": "no_v3", "forbid": re.compile("V3"), "description": ""}]
+    assert classify(crit, ["clean", "also clean"], block_rate=0.5) == ([], [])

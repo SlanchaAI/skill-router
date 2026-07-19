@@ -47,15 +47,32 @@ def load_criteria(skill: str, tasks_dir: Path) -> list[dict]:
     return criteria
 
 
-def evaluate(criteria: list[dict], answers: list[str]) -> list[str]:
-    """Blocking reasons (empty = clean): one string per criterion that any holdout answer
-    violated, naming how many answers matched the forbidden pattern."""
-    violations = []
+def _violations(criteria: list[dict], answers: list[str]) -> list[tuple[float, str]]:
+    """[(violation_rate, reason)] for each criterion some answer violates (empty = clean)."""
+    out = []
+    total = len(answers) or 1
     for c in criteria:
         hits = sum(1 for a in answers if a and c["forbid"].search(a))
         if hits:
             detail = f" ({c['description']})" if c["description"] else ""
-            violations.append(
-                f"acceptance '{c['id']}': {hits}/{len(answers)} holdout answer(s) matched "
-                f"forbidden pattern{detail}")
-    return violations
+            out.append((hits / total,
+                        f"acceptance '{c['id']}': {hits}/{len(answers)} holdout answer(s) matched "
+                        f"forbidden pattern{detail}"))
+    return out
+
+
+def evaluate(criteria: list[dict], answers: list[str]) -> list[str]:
+    """Every violation reason (empty = clean) — the training-signal view the optimizer reads."""
+    return [reason for _rate, reason in _violations(criteria, answers)]
+
+
+def classify(criteria: list[dict], answers: list[str], block_rate: float = 0.5) -> tuple[list[str], list[str]]:
+    """Split violations into (blocking, warning) by per-criterion violation rate: a forbidden
+    pattern in MORE than `block_rate` of the answers means the challenger clearly didn't satisfy
+    the criterion (block); a minority is a warning for the human to weigh with the evidence.
+    block_rate=0 restores strict zero-tolerance (any violation blocks); block_rate>=1 makes
+    acceptance a pure warning (never blocks)."""
+    blocking, warning = [], []
+    for rate, reason in _violations(criteria, answers):
+        (blocking if rate > block_rate else warning).append(reason)
+    return blocking, warning

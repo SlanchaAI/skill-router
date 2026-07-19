@@ -20,9 +20,8 @@ promotion authority; this only replaces how the challenger body is produced.
 import os
 from concurrent.futures import ThreadPoolExecutor
 
-from . import SERVE_TEMPLATE
 from . import skillopt_bridge as sk
-from .rollout import SkillAdapter, assemble, length_penalty, make_reflection_lm
+from .rollout import SkillAdapter, length_penalty, make_reflection_lm
 
 _MAX_WORKERS = 16
 PASS = float(os.environ.get("PROMOTE_PASS_SCORE", "0.5"))          # a task "passes" (hard) at/above this
@@ -79,8 +78,9 @@ def run_skillopt(seed: dict[str, str], tasks: list[dict], frozen: dict[str, str]
     reflection_lm = make_reflection_lm()
 
     def rollout_all(doc: str, subset: list[dict]) -> list:
-        comps = {**seed, doc_key: doc}
-        system = SERVE_TEMPLATE.format(body=assemble({**(frozen or {}), **comps}))
+        # adapter.serve() renders frozen + candidate under the one serving contract the A/B also
+        # serves, so the loop and the held-out gate can never disagree about what a skill looks like.
+        system = adapter.serve({**seed, doc_key: doc})
         with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(subset))) as pool:
             return list(pool.map(lambda ex: adapter._rollout(system, ex), subset))
 

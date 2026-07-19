@@ -31,13 +31,16 @@ def _fake_lm(reply_for):
     return lm
 
 
-def _install(monkeypatch, lm, scorer):
-    """Wire the loop to a stub reflection LM and a body-content-based rollout scorer."""
+def _install(monkeypatch, lm, scorer, answer_fn=None):
+    """Wire the loop to a stub reflection LM and a body-content-based rollout scorer. `answer_fn`
+    optionally derives the rollout's answer text from the served system (for acceptance-criteria
+    tests, which inspect the answer, not the score)."""
     monkeypatch.setattr(S, "make_reflection_lm", lambda: lm)
 
     def _rollout(self, system, ex):
-        return "ans", scorer(system), {"task": ex["task"], "feedback": "fb",
-                                       "output": "ans", "dimensions": {}}
+        ans = answer_fn(system) if answer_fn else "ans"
+        return ans, scorer(system), {"task": ex["task"], "feedback": "fb",
+                                     "output": ans, "dimensions": {}}
     monkeypatch.setattr(R.SkillAdapter, "_rollout", _rollout)
 
 
@@ -152,6 +155,35 @@ def test_reflection_with_no_edits_keeps_seed(monkeypatch):
     _install(monkeypatch, lm, scorer=lambda system: 0.0)   # failing, but reflection is empty
     best, _, _ = S.run_skillopt({"body": "SEED"}, TRAIN, log=lambda *a: None)
     assert best == {"body": "SEED"}
+
+
+def test_acceptance_penalty_docks_a_violating_candidate(monkeypatch):
+    import re
+    monkeypatch.setenv("SKILLOPT_EPOCHS", "1")
+    monkeypatch.setenv("SKILLOPT_MINIBATCH", "10")
+    monkeypatch.setenv("SKILLOPT_ACCEPT_PENALTY", "0.5")
+    crit = [{"id": "no_v3", "forbid": re.compile("V3"), "description": "no V3"}]
+    # analyst only appends (never removes the V3 the seed carries), so every answer keeps emitting V3
+    lm = _fake_lm({"analyst": json.dumps(
+        {"failure_summary": [], "patch": {"edits": [{"op": "append", "content": "GOOD"}]}})})
+    _install(monkeypatch, lm, scorer=lambda s: 1.0 if "GOOD" in s else 0.0,
+             answer_fn=lambda s: "uses V3 directive" if "V3" in s else "clean v4")
+    best, _, best_score = S.run_skillopt({"body": "SEED with V3"}, TRAIN, acceptance=crit,
+                                         log=lambda *a: None)
+    # judge loves the append (1.0) but every answer still violates -> soft docked by the full penalty
+    assert best_score == pytest.approx(0.5)
+
+
+def test_acceptance_violation_steers_reflection_to_remove(monkeypatch):
+    import re
+    monkeypatch.setenv("SKILLOPT_EPOCHS", "1")
+    monkeypatch.setenv("SKILLOPT_MINIBATCH", "10")
+    crit = [{"id": "no_v3", "forbid": re.compile("V3"), "description": "no V3"}]
+    lm = _fake_lm({"analyst": json.dumps(
+        {"failure_summary": [], "patch": {"edits": [{"op": "append", "content": "X"}]}})})
+    _install(monkeypatch, lm, scorer=lambda s: 0.0, answer_fn=lambda s: "emits V3")
+    S.run_skillopt({"body": "SEED"}, TRAIN, acceptance=crit, log=lambda *a: None)
+    assert any("REMOVED" in m for m in lm.seen["reflect_user_msgs"])   # deletion hint reached reflection
 
 
 # ── pure helper functions ──────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 """Unit tests for agent.run.run_task message parsing (the agent LLM is faked)."""
 import asyncio
 
-from agent.run import behavior_events, run_task
+from agent.run import _print_route, behavior_events, run_task
 
 
 class _Msg:
@@ -174,3 +174,16 @@ def test_canonical_route_controls_body_and_weak_strong_escalation():
     assert incompatible_suggestions
     assert should_escalate(routed) is True
     assert "codex-only" not in instructions_for_route(routed)
+
+
+def test_print_route_renders_alternative_reason(capsys):
+    routed = {"match": None, "alternatives": [
+        {"name": "pdf", "score": 0.91, "reason": "Compatible with this harness"}
+    ]}
+
+    _print_route(routed)
+
+    output = capsys.readouterr().out
+    assert "pdf" in output
+    assert "Compatible with this harness" in output
+    assert "None" not in output

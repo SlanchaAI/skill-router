@@ -17,6 +17,7 @@ import json
 import os
 import urllib.request
 from collections import Counter, defaultdict
+from pathlib import Path
 from typing import Callable, NamedTuple
 
 from .judge import DIMENSIONS, failed_dimensions, judge
@@ -53,26 +54,46 @@ def _local_traces(limit: int, err: OSError) -> list[dict]:
     from agent.traces import configured_trace_files
     from optimize import traces_file
     path = traces_file()
-    paths = [candidate for candidate in configured_trace_files(path, oldest_first=True)
-             if candidate.exists()]
+    paths = _local_trace_paths(path, configured_trace_files)
     if not paths:
         raise SystemExit(f"Langfuse unreachable ({err}) and no local trace store at {path} — "
                          "run the agent first to generate traffic.")
-    records = []
-    for trace_path in paths:
-        for line in trace_path.read_text().splitlines():
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            # Records without schema_version are the original schema and remain supported.
-            if _supported_local_record(record):
-                records.append(record)
-    selected = records[-max(0, limit):] if limit > 0 else []
+    records = [record for trace_path in paths for record in _decode_local_trace(trace_path)]
+    selected = _select_local_traces(records, limit)
     print(f"[mine] Langfuse unreachable — using local trace store {path} "
           f"({len(selected)} of {len(records)} usable traces)")
-    return [{"task": r["task"], "rubric": r.get("rubric", ""), "answer": r["answer"],
-             "tags": r.get("tags", [])} for r in selected]
+    return [_local_trace_output(record) for record in selected]
+
+
+def _local_trace_paths(path: Path, configured_trace_files: Callable) -> list[Path]:
+    """Existing trace files in chronological order, from oldest backup to active store."""
+    return [candidate for candidate in configured_trace_files(path, oldest_first=True)
+            if candidate.exists()]
+
+
+def _decode_local_trace(path: Path) -> list[dict]:
+    """Decode the supported records in one local JSONL trace file."""
+    records = []
+    for line in path.read_text().splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        # Records without schema_version are the original schema and remain supported.
+        if _supported_local_record(record):
+            records.append(record)
+    return records
+
+
+def _select_local_traces(records: list[dict], limit: int) -> list[dict]:
+    """Select up to `limit` of the newest usable records, retaining chronological order."""
+    return records[-limit:] if limit > 0 else []
+
+
+def _local_trace_output(record: dict) -> dict:
+    """Map a local record to the public trace shape returned by fetch_traces."""
+    return {"task": record["task"], "rubric": record.get("rubric", ""),
+            "answer": record["answer"], "tags": record.get("tags", [])}
 
 
 def _supported_local_record(record) -> bool:

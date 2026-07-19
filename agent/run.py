@@ -186,8 +186,9 @@ def _print_route(routed: dict) -> None:
     print("\nCOMPATIBLE ROUTE (MCP route_and_load):")
     for proposal in proposals:
         tag = " (related, compose/extend)" if proposal.get("related") else ""
+        explanation = proposal.get("description") or proposal.get("reason")
         print(f"  {proposal.get('score', 0):>6}  {proposal.get('name')}{tag}: "
-              f"{str(proposal.get('description'))[:72]}")
+              f"{str(explanation)[:72]}")
 
 
 def _route_identity(routed: dict) -> str | None:

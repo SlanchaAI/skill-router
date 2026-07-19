@@ -17,6 +17,7 @@ import json
 import os
 import urllib.request
 from collections import Counter, defaultdict
+from typing import Callable, NamedTuple
 
 from .judge import DIMENSIONS, failed_dimensions, judge
 
@@ -174,13 +175,19 @@ def _candidate_representatives(traces: list[dict], scores: list[float], log) -> 
     return indices
 
 
-def _rank_candidates(traces, scores, indices, skill, norm_embed, log) -> list[int]:
+class _RankingContext(NamedTuple):
+    skill: str
+    norm_embed: Callable
+    log: Callable
+
+
+def _rank_candidates(traces, scores, indices, context: _RankingContext) -> list[int]:
     """Rank representative tasks by failure difficulty and embedding coverage."""
     import numpy as np
 
-    vecs = norm_embed([traces[index]["task"] for index in indices])
+    vecs = context.norm_embed([traces[index]["task"] for index in indices])
     difficulty = 1.0 - np.asarray([scores[index] for index in indices], dtype=np.float32)
-    dupes = _train_dupes(vecs, skill, norm_embed, log)
+    dupes = _train_dupes(vecs, context.skill, context.norm_embed, context.log)
     if dupes is not None:
         difficulty[dupes] = -1.0
     return [indices[index] for index in _greedy_pick(difficulty, vecs, MINED_CANDIDATES)]
@@ -192,7 +199,8 @@ def _select_candidates(traces: list[dict], scores: list[float], skill: str, log=
     # Collapse exact and formatting-only duplicates before semantic coverage selection. Keep the
     # lowest-scoring occurrence because it provides the strongest failure evidence.
     indices = _candidate_representatives(traces, scores, log)
-    return _rank_candidates(traces, scores, indices, skill, _normalized_embedder(), log)
+    context = _RankingContext(skill, _normalized_embedder(), log)
+    return _rank_candidates(traces, scores, indices, context)
 
 
 def mine(skill: str, limit: int = 50, log=print) -> dict:

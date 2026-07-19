@@ -190,6 +190,26 @@ def _print_route(routed: dict) -> None:
               f"{str(proposal.get('description'))[:72]}")
 
 
+def _route_identity(routed: dict) -> str | None:
+    """Return the served skill identity, including its revision when available."""
+    match = routed.get("match")
+    if not match:
+        return None
+    revision = routed.get("revision")
+    return f"{match}@{revision}" if revision else match
+
+
+def _trace_tags(routed: dict, escalate: bool) -> list[str]:
+    """Build trace tags for the selected route and serving model."""
+    tags = ["demo", "novel"] if escalate else ["demo"]
+    identity = _route_identity(routed)
+    if identity:
+        tags.append(routed["match"])
+    if identity and routed.get("revision"):
+        tags.append(f"revision={identity}")
+    return tags
+
+
 async def _serve(task: str, routed: dict) -> None:
     """Serve a routed task, record its trace, and print the result."""
     escalate = should_escalate(routed)
@@ -201,16 +221,10 @@ async def _serve(task: str, routed: dict) -> None:
     # Trace tags: plain skill name feeds mine.py's relevance filter, revision=name@rev pins the
     # exact version served, novel marks strong-model escalations, the convention documented for
     # external harnesses (README: Tracing from your own harness).
-    tags = ["demo", "novel"] if escalate else ["demo"]
-    if routed.get("match"):
-        tags.append(routed["match"])
-        if routed.get("revision"):
-            tags.append(f"revision={routed['match']}@{routed['revision']}")
+    tags = _trace_tags(routed, escalate)
     final, loaded, usage = await run_task(agent, task, config=langfuse_config(tags=tags))
-    if routed.get("match"):
-        identity = routed["match"]
-        if routed.get("revision"):
-            identity += f"@{routed['revision']}"
+    identity = _route_identity(routed)
+    if identity:
         loaded = [identity]
     _log_local_trace(task, final, tags)
 

@@ -21,10 +21,16 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from . import skillopt_bridge as sk
+from .acceptance import evaluate as acceptance_evaluate
 from .rollout import SkillAdapter, length_penalty, make_reflection_lm
 
 _MAX_WORKERS = 16
 PASS = float(os.environ.get("PROMOTE_PASS_SCORE", "0.5"))          # a task "passes" (hard) at/above this
+# How hard a candidate is penalized for train answers that violate the skill's acceptance criteria
+# (the fraction of violating answers scales it). Turns the promotion-time invariant into a *training*
+# signal so the loop learns to delete/replace forbidden content instead of appending around it —
+# general to whatever `forbid` patterns a skill declares, not tied to any one skill.
+ACCEPT_PENALTY = float(os.environ.get("SKILLOPT_ACCEPT_PENALTY", "0.5"))
 _SLOW_START, _SLOW_END = "<!-- SLOW_UPDATE_START -->", "<!-- SLOW_UPDATE_END -->"
 _BUFFER_KEEP = 4                                                   # most-recent steps shown to reflection
 
@@ -66,10 +72,12 @@ def _inject_slow_update(doc: str, guidance: str) -> str:
 
 
 def run_skillopt(seed: dict[str, str], tasks: list[dict], frozen: dict[str, str] | None = None,
-                 budget: int | None = None, log=print) -> tuple[dict[str, str], float, float]:
+                 acceptance: list[dict] | None = None, budget: int | None = None,
+                 log=print) -> tuple[dict[str, str], float, float]:
     if not tasks:
         log("[skillopt] no train tasks — keeping the seed.")
         return seed, 0.0, 0.0
+    acceptance = acceptance or []       # the skill's forbid-regex criteria, used as a training signal
     epochs = int(os.environ.get("SKILLOPT_EPOCHS", "2"))
     batch_size = int(os.environ.get("SKILLOPT_MINIBATCH", "3"))
     max_edits = int(os.environ.get("SKILLOPT_MAX_EDITS", "3"))
@@ -86,9 +94,16 @@ def run_skillopt(seed: dict[str, str], tasks: list[dict], frozen: dict[str, str]
 
     def evaluate(doc: str) -> tuple[float, float, dict]:
         """(hard pass-rate, penalized soft mean, per-task pass map) over the full train set — the
-        held-out selection signal for the inner gate."""
+        held-out selection signal for the inner gate. The soft score is docked a length penalty and,
+        proportional to the fraction of answers that violate the skill's acceptance criteria, an
+        acceptance penalty — so a candidate that removes forbidden content outscores one that only
+        appends around it."""
         rs = rollout_all(doc, tasks)
-        soft = max(0.0, sum(r[1] for r in rs) / len(rs) - length_penalty(doc))
+        soft = sum(r[1] for r in rs) / len(rs)
+        if acceptance:
+            violating = sum(1 for a, _, _ in rs if any(c["forbid"].search(a) for c in acceptance))
+            soft -= ACCEPT_PENALTY * (violating / len(rs))
+        soft = max(0.0, soft - length_penalty(doc))
         hard = sum(1.0 for r in rs if r[1] >= PASS) / len(rs)
         passes = {tasks[i]["task"]: rs[i][1] >= PASS for i in range(len(tasks))}
         return hard, soft, passes
@@ -113,6 +128,14 @@ def run_skillopt(seed: dict[str, str], tasks: list[dict], frozen: dict[str, str]
             if not failing:
                 continue
             buf_ctx = _format_buffer(buffer)
+            # Targeted removal signal: if the current answers still emit forbidden content, tell
+            # reflection to strip the offending lines (replace/delete) rather than append around them.
+            violations = acceptance_evaluate(acceptance, [a for a, _, _ in rolls]) if acceptance else []
+            if violations:
+                buf_ctx = ("The skill's current answers STILL emit forbidden content that must be "
+                           "REMOVED — use replace/delete edits to strip the offending lines from the "
+                           "skill, do not merely append around them:\n"
+                           + "\n".join(f"- {v}" for v in violations) + "\n\n" + buf_ctx)
             edits, summary = sk.reflect_edits(current, failing, buf_ctx, max_edits, reflection_lm)
             if not edits:
                 buffer.append({"failures": summary, "rejected": []})

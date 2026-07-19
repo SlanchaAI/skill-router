@@ -408,7 +408,10 @@ def run_ab(skill: str, skip_search: bool = False, challenger_file: str | None = 
         log(f"[skillopt] searching candidates for '{skill}' (components: {sorted(seed)}; frozen: "
             f"{sorted(frozen)}) on {len(train)} train tasks (SkillOpt reflective training loop)…")
         from .skillopt_loop import run_skillopt
-        best, seed_score, best_score = run_skillopt(seed, train, frozen=rollout_frozen, log=log)
+        # the skill's acceptance criteria become a training signal so the loop removes forbidden
+        # content instead of appending around it (the promotion gate still enforces them on holdout)
+        best, seed_score, best_score = run_skillopt(seed, train, frozen=rollout_frozen,
+                                                    acceptance=load_acceptance(skill, TASKS_DIR), log=log)
         challenger = {**champion, **best}
         log(f"[opt] candidate search score: seed {seed_score:.3f} -> best {best_score:.3f}")
         changed = [k for k in champion if challenger.get(k, "").strip() != champion[k].strip()]

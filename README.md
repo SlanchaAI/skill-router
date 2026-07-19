@@ -504,13 +504,20 @@ paths:
    `EXEC_SANDBOX=1` is the legacy bare-subprocess mode; `EXEC_SANDBOX=off` disables execution. A
    task can also ship a `check:` spec (fixture + assert) in its task YAML for artifact-verified
    execution; a broken fixture counts as inconclusive, never against the answer.
-5. **Length penalty.** The objective subtracts a penalty for a bloated body.
-6. **Deletions need evidence.** A challenger that drops most of the champion body (retention below
+5. **Acceptance criteria.** A skill's task YAML can declare `acceptance:` `forbid` regexes — hard
+   invariants the challenger's held-out answers must satisfy (e.g. a Tailwind v4 skill must never
+   emit the v3 `@tailwind base/components/utilities` directives), grounding the judge with a check
+   it can't be talked out of. They're also fed into the SkillOpt inner loop as a training signal so
+   it *removes* forbidden content rather than appending around it. The gate is graded: a forbidden
+   pattern in more than `PROMOTE_ACCEPT_BLOCK_RATE` of the answers (default 0.5) blocks; a minority
+   is a ⚠ warning a human weighs — so a large win isn't auto-killed by one residual model slip.
+6. **Length penalty.** The objective subtracts a penalty for a bloated body.
+7. **Deletions need evidence.** A challenger that drops most of the champion body (retention below
    `RETENTION_WARN`) gets a ⚠ warning in the review UI with the retention number and sample count.
-7. **Blocked means blocked.** A challenger that wins the mean but fails the gate is still recorded
+8. **Blocked means blocked.** A challenger that wins the mean but fails the gate is still recorded
    for diagnosis, but the UI refuses approval and shows the exact reasons, and `approve_pending`
    refuses it again server-side.
-8. **Evidence must still describe the skill on disk.** Promotion recomputes the champion and
+9. **Evidence must still describe the skill on disk.** Promotion recomputes the champion and
    challenger revisions; if the champion changed since the run, approval is refused rather than
    applied to a skill the evidence never measured.
 
@@ -547,6 +554,7 @@ Set in `.env` (never committed):
 | `SKILLOPT_GATE_METRIC` | `mixed` | body pass: inner accept/reject metric — `hard`, `soft`, or `mixed` |
 | `SKILLOPT_GATE_MIXED_WEIGHT` | `0.5` | weight on soft (mean-judge) when the metric is `mixed` |
 | `SKILLOPT_ACCEPT_PENALTY` | `0.5` | how hard the inner loop docks a candidate whose train answers violate the skill's acceptance criteria (steers it to remove forbidden content, not append around it) |
+| `PROMOTE_ACCEPT_BLOCK_RATE` | `0.5` | acceptance violations block promotion past this fraction of holdout answers; a smaller share is a ⚠ review warning. `0` = strict (any violation blocks), `>=1` = warning-only |
 | `COMPAT_MODELS` | `AGENT_MODEL` | comma-separated serving models the cross-model compatibility sweep runs (`optimize-compat`) |
 | `GEPA_ROLLOUTS` | `direct` | how the candidate search rolls out: `direct` (one call under the serving contract) or `agent` (full scaffold per rollout, ~10× cost). Legacy name, kept so existing `.env` files work |
 | `RETENTION_WARN` | `0.5` | review warning when the challenger keeps less than this fraction of the champion body |

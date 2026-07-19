@@ -26,7 +26,7 @@ from mcp_server.registry import SKILLS_DIR, load_skills, optimizable_components,
 
 from . import agent_model, langfuse_available
 from . import usage as usage_ledger
-from .acceptance import evaluate as acceptance_evaluate, load_criteria as load_acceptance
+from .acceptance import classify as acceptance_classify, load_criteria as load_acceptance
 from .judge import judge
 from .promote import save_pending
 from .evidence import build_evidence, recorded_path, write_evidence
@@ -41,6 +41,10 @@ PROMOTE_MIN_SAMPLES = int(os.environ.get("PROMOTE_MIN_SAMPLES", "3"))       # mi
 PASS = float(os.environ.get("PROMOTE_PASS_SCORE", "0.5"))                   # a task "passes" at/above this
 COLLISION_SCORE = float(os.environ.get("COLLISION_SCORE", "0.93"))          # route-shadow cutoff
 RETENTION_WARN = float(os.environ.get("RETENTION_WARN", "0.5"))             # body-retention review warning
+# Acceptance violations block promotion only past this fraction of holdout answers; a smaller
+# share is a review warning (a large improvement shouldn't be auto-killed by a residual model
+# slip). 0 = strict zero-tolerance (any violation blocks); >=1 = pure warning.
+PROMOTE_ACCEPT_BLOCK_RATE = float(os.environ.get("PROMOTE_ACCEPT_BLOCK_RATE", "0.5"))
 # Which components the candidate search may rewrite. Default: body only, because the description is
 # a routing trigger matched by embedding, not instructions the agent reads, so quality search has no
 # business there (bare rollouts can't tell the difference and will happily stuff behavior rules into
@@ -444,18 +448,23 @@ def run_ab(skill: str, skip_search: bool = False, challenger_file: str | None = 
     changed = [k for k in champion if challenger.get(k, "").strip() != champion[k].strip()]
     route_failures = _routing_failures(skill, challenger, holdout) if "description" in changed else []
     route_metrics = _routing_metrics(skill, champion, challenger) if "description" in changed else None
-    # Deterministic invariants on the challenger's holdout answers — a hard gate that the LLM
-    # judge's mean score can't override (grounds the judge the same way execcheck does).
-    acceptance_violations = acceptance_evaluate(
-        load_acceptance(skill, TASKS_DIR), results["challenger"].get("answers", []))
+    # Deterministic invariants on the challenger's holdout answers — grounds the judge the way
+    # execcheck does. Graded: a pervasive violation blocks (clear reward-hack / non-migration);
+    # a minority is a review warning a human weighs, so a big win isn't auto-killed by a residual slip.
+    accept_block, accept_warn = acceptance_classify(
+        load_acceptance(skill, TASKS_DIR), results["challenger"].get("answers", []),
+        PROMOTE_ACCEPT_BLOCK_RATE)
     promotable, blocked = promotion_gate(skill, results["champion"]["scores"],
                                          results["challenger"]["scores"], changed, challenger,
                                          routing_failures=route_failures, leakage=split["leakage"],
                                          routing_metrics=route_metrics,
-                                         acceptance_violations=acceptance_violations)
-    if acceptance_violations:
-        log(f"[ab] ⛔ acceptance criteria violated: {'; '.join(acceptance_violations)}")
-    warnings = retention_warnings(champion, challenger, changed, len(results["challenger"]["scores"]))
+                                         acceptance_violations=accept_block)
+    if accept_block:
+        log(f"[ab] ⛔ acceptance criteria violated (blocking): {'; '.join(accept_block)}")
+    if accept_warn:
+        log(f"[ab] ⚠ acceptance criteria (minority — flagged for review): {'; '.join(accept_warn)}")
+    warnings = retention_warnings(champion, challenger, changed,
+                                  len(results["challenger"]["scores"])) + accept_warn
     summary = {
         "skill": skill, "improved": wins, "created": ts,
         "inner_loop": {"seed_score": seed_score, "best_score": best_score},
@@ -463,7 +472,7 @@ def run_ab(skill: str, skip_search: bool = False, challenger_file: str | None = 
                for v, r in results.items()},
         "dataset": ds_name,
         "gate": {"promotable": promotable, "blocked": blocked, "warnings": warnings,
-                 "acceptance_violations": acceptance_violations},
+                 "acceptance_violations": accept_block + accept_warn},
         "changed_components": changed,
         "champion_components": champion,
         "challenger_components": challenger,

@@ -1,6 +1,8 @@
-"""Unit tests for optimizer pure-logic (no network/LLM): the promotion gate and the
-multi-dimensional judge's failure parsing."""
+"""Unit tests for candidate-generation pure logic (no network/LLM): the promotion gate, the CLI
+contract, and the multi-dimensional judge's failure parsing."""
 import inspect
+
+import pytest
 
 from optimize import ab as ab_mod
 from optimize import judge as judge_mod
@@ -243,7 +245,6 @@ def test_optimize_split_env_can_widen(monkeypatch):
 
 
 def test_optimize_split_rejects_unknown_component(monkeypatch):
-    import pytest
     monkeypatch.setattr(ab_mod, "OPTIMIZE_COMPONENTS", ["bodyy"])
     with pytest.raises(SystemExit, match="bodyy"):
         ab_mod.optimize_split({"description": "d", "body": "b"})
@@ -271,7 +272,7 @@ def test_eval_serve_template_injects_body_and_contract():
     assert "# Loaded skill" in text
 
 
-def test_rollout_serves_the_system_it_is_handed(monkeypatch):
+def test_rollouts_serve_the_exact_serving_contract(monkeypatch):
     from optimize import SERVE_TEMPLATE
     from optimize import rollout as R
     captured = {}
@@ -288,17 +289,16 @@ def test_rollout_serves_the_system_it_is_handed(monkeypatch):
     monkeypatch.setattr(R, "judge",
                         lambda t, r, a, reference="", check=None, deliverable=None:
                         {"score": 1.0, "feedback": "f", "dimensions": {}})
-    # skillopt_loop assembles this exact serving contract before calling _rollout; _rollout must
-    # forward it verbatim so the inner loop and outer A/B serve identical text.
-    system = SERVE_TEMPLATE.format(body=R.assemble({"description": "trigger words", "body": "the rules"}))
-    answer, score, _traj = adapter._rollout(system, {"task": "t", "rubric": "r"})
+    candidate = {"body": "the rules"}
+    answer, score, _ = adapter._rollout(adapter.serve(candidate), {"task": "t", "rubric": "r"})
     assert (answer, score) == ("an answer", 1.0)
-    assert captured["system"] == system
+    # candidate search and the held-out A/B must serve the identical contract text
+    assert captured["system"] == SERVE_TEMPLATE.format(
+        body=R.assemble({"description": "trigger words", "body": "the rules"}))
     assert "complete deliverable" in captured["system"]
 
 
 def test_agent_rollout_mode_routes_through_the_scaffold(monkeypatch):
-    from optimize import SERVE_TEMPLATE
     from optimize import rollout as R
     monkeypatch.setattr(R, "GEPA_ROLLOUTS", "agent")
     monkeypatch.setattr(R, "judge",
@@ -313,6 +313,45 @@ def test_agent_rollout_mode_routes_through_the_scaffold(monkeypatch):
     monkeypatch.setattr(R.SkillAdapter, "_agent_rollout", fake_agent_rollout)
     adapter = R.SkillAdapter()
     adapter._llm = None  # direct-mode client must not be touched in agent mode
-    answer, score, _traj = adapter._rollout(SERVE_TEMPLATE.format(body="b"), {"task": "t1", "rubric": "r"})
+    answer, _, _ = adapter._rollout(adapter.serve({"body": "b"}), {"task": "t1", "rubric": "r"})
     assert answer == "scaffold answer" and seen["task"] == "t1"
     assert seen["system_has_contract"]
+
+
+def test_removed_gepa_body_loop_leaves_one_candidate_search():
+    """The sequential GEPA body loop is gone: best-of-N is the only candidate search, and an
+    inherited OPTIMIZE_STRATEGY must say so rather than silently mean nothing."""
+    from optimize import rollout as R
+    assert not hasattr(R, "run_gepa")
+    with pytest.raises(ImportError):
+        import optimize.gepa_loop  # noqa: F401
+    assert "strategy" not in inspect.signature(ab_mod.run_ab).parameters
+
+
+@pytest.mark.parametrize("flag", ["--scripts", "--gepa", "--skip-gepa", "--strategy", "--candidates"])
+def test_cli_rejects_flags_for_passes_that_do_not_exist(flag):
+    """A flag naming a removed or never-shipped pass must fail the parse, not be quietly ignored.
+    Asserting on the parser rather than the source text is what proves the refusal."""
+    with pytest.raises(SystemExit):
+        ab_mod.parse_args(["pdf", flag])
+
+
+def test_cli_accepts_the_passes_that_do_exist():
+    body = ab_mod.parse_args(["pdf"])
+    assert body.description is False and body.skill == "pdf"
+    assert ab_mod.parse_args(["pdf", "--description"]).description is True
+    assert ab_mod.parse_args(["pdf", "--skip-search"]).skip_search is True
+
+
+def test_cli_refuses_a_budget_the_body_pass_would_ignore():
+    """--budget only bounds the routing pass's metric calls. Accepting it on the body pass would
+    promise a limit nothing enforces."""
+    with pytest.raises(SystemExit):
+        ab_mod.parse_args(["pdf", "--budget", "10"])
+    assert ab_mod.parse_args(["pdf", "--description", "--budget", "10"]).budget == 10
+    assert ab_mod.parse_args(["pdf", "--description"]).budget == ab_mod.DEFAULT_ROUTING_BUDGET
+
+
+def test_cli_refuses_both_passes_at_once():
+    with pytest.raises(SystemExit):
+        ab_mod.parse_args(["pdf", "--body", "--description"])

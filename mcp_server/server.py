@@ -27,10 +27,12 @@ class _State:
 
     @staticmethod
     def _signature(roots) -> tuple:
+        """Change detector over exactly the directories load_skills reads. Hidden directories are
+        excluded there (promotion/rollback staging), so watching them here would only churn."""
         files = []
         for root in roots:
             for skill_root in root.iterdir() if root.exists() else ():
-                if skill_root.is_dir():
+                if skill_root.is_dir() and not skill_root.name.startswith("."):
                     files.extend(path for path in skill_root.rglob("*") if path.is_file())
         return tuple((str(path.resolve()), path.stat().st_mtime_ns, path.stat().st_size)
                      for path in sorted(files))
@@ -100,7 +102,7 @@ def create_skill(name: str, description: str, body: str) -> str:
     if problem:
         return f"Invalid skill name '{name}': {problem}."
     if slug in STATE.by_name or (SKILLS_DIR / slug).exists():
-        return f"Skill '{slug}' already exists — improve it via the optimizer instead."
+        return f"Skill '{slug}' already exists; propose a change to it with a candidate run instead."
     if load_pending(slug):
         return f"Skill '{slug}' is already awaiting human review."
     problems = safety.scan(description, body)
@@ -112,8 +114,8 @@ def create_skill(name: str, description: str, body: str) -> str:
     shadowed, score = STATE.router.nearest(description)
     if score >= COLLISION_SCORE:
         return (f"Skill '{slug}' rejected: description too similar to existing skill "
-                f"'{shadowed}' (cosine {score:.2f}) — would shadow its routing. Refine it or "
-                f"improve '{shadowed}' via the optimizer instead.")
+                f"'{shadowed}' (cosine {score:.2f}), which it would shadow for routing. Refine it, "
+                f"or propose a change to '{shadowed}' with a candidate run instead.")
     save_pending(slug, {
         "kind": "creation",
         "skill": slug,
@@ -140,10 +142,9 @@ def route_and_load(task: str, harness: str, cwd: str, available_tools: list[str]
                    available_mcps: list[str] | None = None) -> dict:
     """Select one compatible skill for a task and return its instructions, or return no match.
     The result's `novel` flag is the weak/strong routing signal for the calling harness:
-    a `match` -> follow `skill_body` (a weak/cheap model suffices); no match with `novel` false ->
-    related skills exist (see suggest_skills) to compose or extend; `novel` true -> nothing even
-    related, so serve with your strong model; the caller may use create_skill to queue a candidate
-    for human review."""
+    a direct `match` -> follow `skill_body`; a `related_match` with `novel` false -> use its loaded
+    body to compose or extend; `novel` true -> nothing even related, so serve with your strong
+    model. Only the selected compatible match can carry a body; alternatives are metadata-only."""
     STATE.refresh_if_changed()
     return STATE.router.route(task, harness, cwd, available_tools or [], available_mcps or [],
                               min_score=MIN_SCORE, related_score=RELATED_SCORE)

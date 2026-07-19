@@ -144,9 +144,8 @@ def _train_dupes(vecs, skill: str, norm_embed, log):
     return dupes
 
 
-def _select_candidates(traces: list[dict], scores: list[float], skill: str, log=print) -> list[int]:
-    """Pick eval candidates from mined traces: difficulty from the judge (1 - score), spread
-    by embedding coverage, and never a near-duplicate of the skill's existing train set."""
+def _normalized_embedder():
+    """Return an embedding function that produces row-normalized float vectors."""
     import numpy as np
     from fastembed import TextEmbedding
     from mcp_server.router import _MODEL
@@ -154,26 +153,46 @@ def _select_candidates(traces: list[dict], scores: list[float], skill: str, log=
     embedder = TextEmbedding(model_name=_MODEL)
 
     def norm_embed(texts):
-        m = np.array(list(embedder.embed(texts)), dtype=np.float32)
-        return m / np.linalg.norm(m, axis=1, keepdims=True)
+        matrix = np.array(list(embedder.embed(texts)), dtype=np.float32)
+        return matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
 
-    # Collapse exact and formatting-only duplicates before semantic coverage selection. Keep the
-    # lowest-scoring occurrence because it provides the strongest failure evidence.
-    canonical = lambda text: " ".join(text.casefold().split())
+    return norm_embed
+
+
+def _candidate_representatives(traces: list[dict], scores: list[float], log) -> list[int]:
+    """Keep the lowest-scoring representative of each formatting-equivalent task."""
     representatives = {}
     for index, trace in enumerate(traces):
-        key = canonical(trace["task"])
-        if key not in representatives or scores[index] < scores[representatives[key]]:
+        key = " ".join(trace["task"].casefold().split())
+        previous = representatives.get(key)
+        if previous is None or scores[index] < scores[previous]:
             representatives[key] = index
     indices = list(representatives.values())
-    if len(indices) != len(traces):
-        log(f"[mine] {len(traces) - len(indices)} duplicate candidate(s) collapsed")
-    vecs = norm_embed([traces[i]["task"] for i in indices])
-    difficulty = 1.0 - np.asarray([scores[i] for i in indices], dtype=np.float32)
+    collapsed = len(traces) - len(indices)
+    if collapsed:
+        log(f"[mine] {collapsed} duplicate candidate(s) collapsed")
+    return indices
+
+
+def _rank_candidates(traces, scores, indices, skill, norm_embed, log) -> list[int]:
+    """Rank representative tasks by failure difficulty and embedding coverage."""
+    import numpy as np
+
+    vecs = norm_embed([traces[index]["task"] for index in indices])
+    difficulty = 1.0 - np.asarray([scores[index] for index in indices], dtype=np.float32)
     dupes = _train_dupes(vecs, skill, norm_embed, log)
     if dupes is not None:
         difficulty[dupes] = -1.0
-    return [indices[i] for i in _greedy_pick(difficulty, vecs, MINED_CANDIDATES)]
+    return [indices[index] for index in _greedy_pick(difficulty, vecs, MINED_CANDIDATES)]
+
+
+def _select_candidates(traces: list[dict], scores: list[float], skill: str, log=print) -> list[int]:
+    """Pick eval candidates from mined traces: difficulty from the judge (1 - score), spread
+    by embedding coverage, and never a near-duplicate of the skill's existing train set."""
+    # Collapse exact and formatting-only duplicates before semantic coverage selection. Keep the
+    # lowest-scoring occurrence because it provides the strongest failure evidence.
+    indices = _candidate_representatives(traces, scores, log)
+    return _rank_candidates(traces, scores, indices, skill, _normalized_embedder(), log)
 
 
 def mine(skill: str, limit: int = 50, log=print) -> dict:

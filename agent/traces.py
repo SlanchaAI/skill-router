@@ -24,10 +24,16 @@ def redact(value: str) -> str:
     return _SECRET.sub(lambda match: f"{match.group(1)}[REDACTED]", value)
 
 
+def _rotation_due(path: Path, max_bytes: int) -> bool:
+    if not path.exists() or not max_bytes:
+        return False
+    return path.stat().st_size >= max_bytes
+
+
 def _rotate(path: Path) -> None:
     max_bytes = max(0, int(os.environ.get("LOCAL_TRACE_MAX_BYTES", "10485760")))
     backups = max(0, int(os.environ.get("LOCAL_TRACE_BACKUPS", "3")))
-    if not path.exists() or not max_bytes or path.stat().st_size < max_bytes:
+    if not _rotation_due(path, max_bytes):
         return
     if backups == 0:
         path.unlink()

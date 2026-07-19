@@ -258,20 +258,27 @@ def approve_pending(skill: str, actor: str = "local-operator") -> str:
     return result
 
 
-def rollback(skill: str, revision: str, actor: str = "local-operator") -> str:
-    """Atomically restore a snapshot while preserving the displaced current revision."""
+def _rollback_source(skill: str, revision: str) -> Path:
+    """Validate a rollback request and return its snapshot directory."""
     skill = check_slug(skill)
     if not SLUG_RE.fullmatch(revision):
         raise ValueError(f"invalid revision: {revision!r}")
-    current = _current_skill(skill)
     source = REVISIONS_DIR / skill / revision
     if not source.is_dir():
         raise ValueError(f"no snapshot for '{skill}' at revision {revision}")
-    skill_dir = Path(current.root)
-    _snapshot(skill_dir, skill, current.revision)
+    return source
+
+
+def _stage_rollback(source: Path, skill_dir: Path) -> Path:
+    """Copy a rollback snapshot beside the live skill for an atomic rename."""
     stage = skill_dir.with_name(f".{skill_dir.name}.{uuid.uuid4().hex}.rollback")
-    previous = skill_dir.with_name(f".{skill_dir.name}.{uuid.uuid4().hex}.previous")
     shutil.copytree(source, stage, symlinks=True)
+    return stage
+
+
+def _swap_rollback(skill_dir: Path, stage: Path) -> None:
+    """Atomically install a staged rollback, restoring the live directory on failure."""
+    previous = skill_dir.with_name(f".{skill_dir.name}.{uuid.uuid4().hex}.previous")
     try:
         skill_dir.rename(previous)
         try:
@@ -283,6 +290,16 @@ def rollback(skill: str, revision: str, actor: str = "local-operator") -> str:
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
         raise
+
+
+def rollback(skill: str, revision: str, actor: str = "local-operator") -> str:
+    """Atomically restore a snapshot while preserving the displaced current revision."""
+    source = _rollback_source(skill, revision)
+    current = _current_skill(skill)
+    skill_dir = Path(current.root)
+    _snapshot(skill_dir, skill, current.revision)
+    stage = _stage_rollback(source, skill_dir)
+    _swap_rollback(skill_dir, stage)
     restored = _current_skill(skill)
     _audit("rollback", skill, restored.revision, actor)
     return f"Rolled back '{skill}' from {current.revision} to {restored.revision}."

@@ -170,16 +170,16 @@ async def _connect(retries: int = 20, delay: float = 1.5):
             await asyncio.sleep(delay)
 
 
-async def main(task: str):
-    print("=" * 64)
-    print(f"TASK: {task}")
-    print("=" * 64)
-
-    # 1) One canonical route call; `.data` is the parsed result with no content-block plumbing.
+async def _route(task: str) -> dict:
+    """Request the single canonical route used for both prompting and trace attribution."""
     from fastmcp import Client
     async with Client(MCP_URL) as client:
-        routed = (await client.call_tool(
+        return (await client.call_tool(
             "route_and_load", {"task": task, "harness": "claude", "cwd": "/app"})).data
+
+
+def _print_route(routed: dict) -> None:
+    """Display the selected route and any compatible alternatives."""
     proposals = ([{"name": routed["match"], "score": routed["score"],
                    "description": routed["reason"]}] if routed.get("match") else [])
     proposals.extend(routed.get("alternatives", []))
@@ -189,14 +189,9 @@ async def main(task: str):
         print(f"  {proposal.get('score', 0):>6}  {proposal.get('name')}{tag}: "
               f"{str(proposal.get('description'))[:72]}")
 
-    from optimize import openrouter_key_missing
-    if openrouter_key_missing():
-        print("\n[agent] OPENROUTER_API_KEY not set — showing router proposals only.")
-        print("        Set OPENROUTER_API_KEY in .env to run the deep agent (or point")
-        print("        MODEL_BASE_URL at a local vLLM/Ollama endpoint — no key needed).")
-        return
 
-    # 2) Serve the body selected above. Only the route's novel flag escalates to the strong model.
+async def _serve(task: str, routed: dict) -> None:
+    """Serve a routed task, record its trace, and print the result."""
     escalate = should_escalate(routed)
     if escalate:
         print(f"\nSERVING MODEL: {strong_model()} (strong: no skill matched)")
@@ -229,6 +224,23 @@ async def main(task: str):
         from langfuse import get_client
         get_client().flush()  # one-shot process: make sure the trace ships before exit
         print("[agent] trace sent to Langfuse (http://localhost:3100)")
+
+
+async def main(task: str):
+    print("=" * 64)
+    print(f"TASK: {task}")
+    print("=" * 64)
+
+    routed = await _route(task)
+    _print_route(routed)
+
+    from optimize import openrouter_key_missing
+    if openrouter_key_missing():
+        print("\n[agent] OPENROUTER_API_KEY not set, showing router proposals only.")
+        print("        Set OPENROUTER_API_KEY in .env to run the deep agent (or point")
+        print("        MODEL_BASE_URL at a local vLLM/Ollama endpoint, no key needed).")
+        return
+    await _serve(task, routed)
 
 
 def _log_local_trace(task: str, answer: str, tags: list[str]) -> None:

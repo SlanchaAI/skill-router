@@ -26,9 +26,28 @@ def _issuer() -> str:
     return f"{KEYCLOAK_URL.rstrip('/')}/realms/{REALM}"
 
 
+def _discovery():
+    """Fetch the discovery doc, retrying while Keycloak boots (start-dev + realm import can take
+    ~30s after `compose up` returns; without this the test races the container)."""
+    import time
+
+    import httpx
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            resp = httpx.get(f"{_issuer()}/.well-known/openid-configuration", timeout=15)
+            if resp.status_code == 200:
+                return resp.json()
+        except httpx.HTTPError:
+            pass
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"Keycloak at {KEYCLOAK_URL} not ready after 120s")
+        time.sleep(2)
+
+
 def _token_and_jwks():
     import httpx
-    disc = httpx.get(f"{_issuer()}/.well-known/openid-configuration", timeout=15).json()
+    disc = _discovery()
     jwks = httpx.get(disc["jwks_uri"], timeout=15).json()
     resp = httpx.post(disc["token_endpoint"], timeout=15, data={
         "grant_type": "password", "client_id": "ingot", "scope": "openid",

@@ -53,10 +53,16 @@ def identity_from_claims(claims: dict, role_claim: str = "roles",
                          role_map: dict[str, str] | None = None) -> dict:
     """OIDC ID-token claims -> {sub, email, name, role}. `role_claim` names the claim carrying the
     app-role/group values, Entra app roles use `roles`, Okta groups use `groups`. The value may be a
-    single string or a list; email falls back to `preferred_username`."""
+    single string or a list; email falls back to `preferred_username`. Parsing fails closed: any
+    other claim shape (number, object, non-string list entries) contributes no roles rather than
+    erroring, so a malformed token can only lose privileges."""
     values = claims.get(role_claim) or []
     if isinstance(values, str):
         values = [values]
+    elif isinstance(values, list):
+        values = [v for v in values if isinstance(v, str)]
+    else:
+        values = []
     return {
         "sub": claims.get("sub", ""),
         "email": claims.get("email") or claims.get("preferred_username", ""),

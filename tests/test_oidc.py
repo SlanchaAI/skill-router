@@ -65,11 +65,23 @@ def test_token_without_sub_is_rejected(idp):
 
 
 def test_multi_audience_requires_matching_azp(idp):
-    without_azp = idp.id_token(aud=["ingot", "other-app"])
+    aud = [idp.audience, "other-app"]
+    without_azp = idp.id_token(aud=aud)
     with pytest.raises(InvalidToken):
         verify_id_token(without_azp, idp.jwks, idp.issuer, idp.audience)
-    with_azp = idp.id_token(aud=["ingot", "other-app"], azp="ingot")
-    assert verify_id_token(with_azp, idp.jwks, idp.issuer, idp.audience)["azp"] == "ingot"
+    wrong_azp = idp.id_token(aud=aud, azp="other-app")
+    with pytest.raises(InvalidToken):
+        verify_id_token(wrong_azp, idp.jwks, idp.issuer, idp.audience)
+    with_azp = idp.id_token(aud=aud, azp=idp.audience)
+    assert verify_id_token(with_azp, idp.jwks, idp.issuer, idp.audience)["azp"] == idp.audience
+
+
+def test_mismatched_azp_is_rejected_even_single_audience(idp):
+    # OIDC core: if azp is present it must be our client_id, a wrong azp means the token was
+    # issued to a different client, regardless of aud shape
+    token = idp.id_token(azp="other-app")
+    with pytest.raises(InvalidToken):
+        verify_id_token(token, idp.jwks, idp.issuer, idp.audience)
 
 
 def test_malformed_jwks_key_raises_invalid_token_not_500(idp):

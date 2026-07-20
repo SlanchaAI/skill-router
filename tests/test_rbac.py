@@ -57,3 +57,18 @@ def test_identity_defaults_to_viewer_with_no_matching_claims():
     ident = rbac.identity_from_claims({"sub": "s", "email": "e@corp.com", "groups": ["random"]},
                                       role_claim="groups", role_map={"eng-approvers": "approver"})
     assert ident["role"] == "viewer"
+
+
+def test_malformed_role_claims_fail_closed_not_crash():
+    # a malformed claim shape must yield no roles (viewer), never a TypeError -> 500
+    role_map = {"g-admin": "admin"}
+
+    def role_of(claim_value):
+        return rbac.identity_from_claims({"sub": "s", "roles": claim_value},
+                                         role_claim="roles", role_map=role_map)["role"]
+
+    assert role_of(42) == "viewer"                       # number, not iterable
+    assert role_of({"g-admin": True}) == "viewer"        # object, not string/list
+    assert role_of([{"nested": "object"}]) == "viewer"   # unhashable list entry
+    assert role_of([None, 7]) == "viewer"                # non-string entries
+    assert role_of(["g-admin", {"x": 1}]) == "admin"     # valid string entries still count

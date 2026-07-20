@@ -45,9 +45,13 @@ def verify_id_token(token: str, jwks: dict, issuer: str, audience: str, *,
             options={"require": ["exp", "iat", "aud", "iss", "sub"]})
     except jwt.PyJWTError as e:
         raise InvalidToken(str(e)) from e
+    # OIDC core 3.1.3.7: a multi-audience token must carry azp, and any azp present must be our
+    # client_id, a mismatched azp means the token was issued to a different client.
     aud = claims.get("aud")
-    if isinstance(aud, list) and len(aud) > 1 and claims.get("azp") != audience:
-        raise InvalidToken("multi-audience token without a matching azp")
+    if isinstance(aud, list) and len(aud) > 1 and "azp" not in claims:
+        raise InvalidToken("multi-audience token without an azp")
+    if "azp" in claims and claims["azp"] != audience:
+        raise InvalidToken("azp does not match our client_id")
     if nonce is not None and claims.get("nonce") != nonce:
         raise InvalidToken("nonce mismatch")
     return claims

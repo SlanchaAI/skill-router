@@ -75,8 +75,10 @@ Extend `ui/auth.py` with an OIDC mode selected by config (below). When enabled:
    provider JWKS (issuer, audience, `exp`/`iat`, and the persisted `nonce`) via
    `ui.oidc.verify_id_token`. ID-token checks alone are not enough: without the `state`/verifier/nonce
    binding, login-CSRF and code-injection are possible. On success establish a **signed session
-   cookie** (Starlette `SessionMiddleware` / `itsdangerous`, `HttpOnly` + `Secure` + `SameSite`);
-   store `{sub, email, name, roles}`.
+   cookie** (Starlette `SessionMiddleware` / `itsdangerous`, `HttpOnly` + `Secure` + `SameSite`,
+   with an explicit max-age so a stolen cookie expires); store only `{sub, email, name, roles}`,
+   nothing more (the cookie is signed, not encrypted, so its payload is readable). Rotating
+   `SESSION_SECRET` invalidates all sessions, which is the operator's kill switch.
 3. `/auth/logout` clears the session.
 4. The existing `current_actor` dependency returns the session's `email`/`sub` instead of the Basic
    username, so the audit `actor` path is unchanged.
@@ -105,6 +107,11 @@ Roles, least- to most-privileged:
   - **Entra: use *app roles*, not groups.** App roles are always present in the token; groups hit
     the ">200 groups overage" problem where Entra omits them and forces a Microsoft Graph call.
   - **Okta / others: groups claim** → app role via a configured map.
+  - **Claim parsing fails closed** (`ui.rbac.identity_from_claims`): the claim value may be a single
+    string or a list of strings; multiple mapped values union and the highest role wins. Any other
+    shape (number, object, non-string list entries) contributes no roles, never an error, so a
+    malformed token can only lose privileges, and mapped values are matched exactly, unknown values
+    are ignored.
 - Roles are **hierarchical**: `admin` satisfies `approver`, `proposer`, and read; `require_role(r)`
   passes for any role at least as privileged (this is `ui.rbac.has_role`, already implemented as a
   rank comparison, so an exact-match check must not be used).

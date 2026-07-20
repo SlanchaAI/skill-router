@@ -803,7 +803,7 @@ const sc = x => (x == null ? "—" : Number(x).toFixed(3));
 function delta(before, after, lowerBetter) {
   if (before == null || after == null) return "";
   const d = after - before, cls = d === 0 ? "" : ((lowerBetter ? d < 0 : d > 0) ? "win" : "lose");
-  const v = Math.abs(d) % 1 ? d.toFixed(3) : d.toFixed(0);
+  const v = Math.abs(d) < 1 ? d.toFixed(3) : Math.round(d).toString();  // scores keep decimals, tokens whole
   return `<span class="${cls}">${d >= 0 ? "+" : ""}${v}</span>`;
 }
 function buildCompare(p) {

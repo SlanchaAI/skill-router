@@ -27,7 +27,7 @@ from mcp_server.registry import SKILLS_DIR, load_skills, optimizable_components,
 from . import agent_model, langfuse_available
 from . import usage as usage_ledger
 from .acceptance import classify as acceptance_classify, load_criteria as load_acceptance
-from .judge import judge
+from .judge import MODELS as JUDGE_MODELS, judge
 from .promote import save_pending
 from .evidence import build_evidence, recorded_path, write_evidence
 
@@ -478,7 +478,7 @@ def run_ab(skill: str, skip_search: bool = False, challenger_file: str | None = 
         "challenger_components": challenger,
         "harness": "codex",
         "model": agent_model(),
-        "judge": os.environ.get("JUDGE_MODELS") or os.environ.get("JUDGE_MODEL", ""),
+        "judge": ", ".join(JUDGE_MODELS),
         "behavior": {variant: result["behavior"] for variant, result in results.items()},
         "routing_failures": route_failures,
         "routing": route_metrics,

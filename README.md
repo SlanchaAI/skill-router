@@ -49,8 +49,8 @@ Where do changes come from? Mostly from you and your agents. Ingot also ships an
 candidate generator: it mines real traces for failing skills, drafts rewrites, and measures them on
 held-out tasks. It is a background experiment that produces proposals, never activations. In the
 [recorded walkthrough below](#5-optional-generate-a-candidate-in-the-background), a stale skill's
-held-out mean judge score rose from 0.133 to 0.767 while output tokens fell from 1,278 to 1,032, for
-about $0.04, and a human still had to approve it.
+held-out mean judge score rose from 0.133 to 0.667 while output tokens fell from 1,278 to 808, for
+about $0.06, and a human still had to approve it.
 
 [Quickstart](#quickstart-lite-mode) · [Full tutorial](#tutorial) ·
 [Architecture](ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) ·
@@ -164,7 +164,11 @@ docker compose up --build
 ```
 
 This brings up the MCP server (`localhost:8000`) and the change-control UI (`localhost:8080`), then
-runs the agent once on a demo task.
+runs the agent once on a demo task. The UI lists every skill the router serves, each with its
+content-hash revision and a load count (how often it has actually been served), and surfaces
+anything awaiting review:
+
+![Change-control UI — the skills library, with revisions and load counts](docs/ui-home.png)
 
 No skills are committed to this repo. `fetch_skills.sh` clones each source, copies its skills in,
 and deletes the clone, so everything stays under its own upstream license. Without an API key
@@ -299,28 +303,33 @@ the winner against the champion through the full agent on the held-out tasks (ab
 few cents). The UI's **Generate candidate** button starts the same run. Our run:
 
 ```
-[skillopt] seed: hard 0.000 soft 0.033 gate 0.017 (mixed) on 6 train tasks; 2 epoch(s), minibatch 3, ≤3 edits/step
-[skillopt] step 1: accept_new_best (2 edit(s)) — gate 0.520
-[skillopt] step 2: rejected (3 edit(s)) — buffered
-[skillopt] step 3: accept_new_best (1 edit(s)) — gate 0.883
-[skillopt] winner after 4 step(s): gate 0.883 (seed 0.017)
+[skillopt] seed: hard 0.000 soft 0.000 gate 0.000 (mixed) on 6 train tasks; 2 epoch(s), minibatch 3, ≤3 edits/step
+[skillopt] step 1: accept_new_best (1 edit(s)) — gate 0.750
+[skillopt] step 2: accept_new_best (3 edit(s)) — gate 0.767
+[skillopt] step 3: accept_new_best (2 edit(s)) — gate 0.808
+[skillopt] step 4: accept_new_best (1 edit(s)) — gate 0.817
+[skillopt] winner after 4 step(s): gate 0.817 (seed 0.000)
 [ab] champion: mean judge score 0.133  [0.0, 0.2, 0.2, 0.0, 0.2, 0.2]
-[ab] challenger: mean judge score 0.767  [0.7, 0.9, 1.0, 0.9, 0.9, 0.2]
-[ab] champion 0.133 vs challenger 0.767 -> CHALLENGER WINS
-[ab] output tokens/task: 1278 -> 1032 (-246)
-  estimated cost: $0.04 (OpenRouter list prices)
+[ab] challenger: mean judge score 0.667  [0.8, 1.0, 0.9, 0.9, 0.4, 0.0]
+[ab] champion 0.133 vs challenger 0.667 -> CHALLENGER WINS
+[ab] output tokens/task: 1278 -> 808 (-470)
+[ab] ⚠ acceptance criteria (minority — flagged for review): 'no_v3_tailwind_directives': 1/6 holdout answer(s) matched
+[ab] ⚠ challenger drops 80% of the champion body, gated on only 6 held-out task(s) — review the deletions carefully
+  estimated cost: $0.06 (OpenRouter list prices)
 [ab] pending approval written to /app/runs/pending/tailwind.json - review + promote at http://localhost:8080
 ```
 
-Read what happened. The stub scored 0.033 in bare rollouts. SkillOpt's loop reflected on the
-failing minibatches, proposed bounded edits to the body, and kept only the ones that improved the
-held-out selection score — step 2's edits didn't, so they were rejected and their content was
-buffered so later reflections wouldn't re-propose them (see
-[Candidate generation](#candidate-generation)). The accepted edits distilled a v4 body. On the
-held-out A/B through the real agent, the stub champion scored 0.133: a small serving model follows
-the loaded v3 advice straight into wrong answers, so a stale body actively hurts. The challenger
-scored 0.767, a +0.63 margin that clears the default promotion bar (+0.15) with room to spare, and
-it answers with fewer tokens. A human still approves the diff in the UI before anything ships.
+Read what happened. Every line of the stub body is the v3 way, so it scored 0.000 in bare rollouts.
+SkillOpt reflected on the failing minibatches, and because the judge feedback flagged the loaded
+guidance as *wrong* (not just incomplete), it proposed bounded **delete/replace** edits that stripped
+the stale v3 lines rather than appending beside them — that is the 80% body drop the review gate
+flags. Across four accepted steps the body became clean v4. On the held-out A/B through the real
+agent, the stub champion scored 0.133 — a small serving model follows the loaded v3 advice straight
+into wrong answers — while the challenger scored **0.667 with fewer tokens** (808 vs 1278 out/task).
+The acceptance gate caught a residual: on 1 of 6 holdout tasks the weak model still emitted a v3
+directive despite the clean body — a minority, so the graded gate flags it as a ⚠ warning rather
+than blocking. The result is **promotable-but-flagged**: a human weighs the large deletion and the
+residual slip in the comparison panel before approving, and only then does `skills/tailwind` change.
 
 Note what the run did *not* do: it did not touch `skills/tailwind/`. It wrote a quarantined record
 and an evidence bundle, and stopped.
@@ -353,14 +362,17 @@ the GEPA body loop and now selects the SkillOpt candidate search's rollout mode)
 
 Back at **http://localhost:8080**, the header pill flips to **1 to review**, the Review section
 leads with the evidence, and the `tailwind` row shows a `change awaiting review` chip. The card
-carries the judge scores, the token shift, the retention warning, the recorded evidence bundle, and
-the component diff (a routing change shows its metric deltas the same way), then **Approve &
-promote** and **Reject**. Snapshots and the approval trail sit below it in **History**.
+carries the champion-vs-challenger judge scores, the before/after token shift, the gate verdict and
+its warnings, the recorded evidence bundle, and the component diff — here the red lines are the v3
+guidance SkillOpt removed and the green lines are the v4 body it wrote:
 
-> No screenshot is included here. The last recorded one was taken against a superseded label set
-> ("Pending challenger", "promotion gate"), and this README only carries artifacts from a real run,
-> so it was removed rather than re-captioned or re-drawn. Recapturing it needs a live stack with a
-> real pending change, which is a follow-up.
+![Review card — the tailwind v3→v4 challenger, promotable with warnings](docs/ui-review.png)
+
+**Approve** doesn't promote in one click: it opens a comparison panel with the model breakdown,
+the before/after token usage, and the per-task judge scores, and a final **Approve & promote** that
+reveals a separate **Confirm** — so a promotion is deliberate.
+
+![Comparison panel — model, tokens, and judge scores before Confirm](docs/ui-compare.png)
 
 **Approve & promote** verifies the evidence still matches the on-disk champion, snapshots the prior
 revision into `runs/revisions/tailwind/<revision>/`, swaps the challenger into `skills/tailwind/` by

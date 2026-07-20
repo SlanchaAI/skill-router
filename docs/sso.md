@@ -38,6 +38,11 @@ callback as an **Authorized redirect URI**:
 - production: `https://ingot.your-company.example/auth/callback`
 - local testing: `http://localhost:8080/auth/callback`
 
+On a LAN, the `lan` compose profile (docs/security.md "Network exposure") terminates TLS for any
+hostname, so use `https://<the-box's-DNS-name>/auth/callback`. Google rejects raw-IP and plain-http
+redirect URIs, so OIDC needs the box to have a DNS name under a real domain; the password mode has
+no such constraint.
+
 Copy the **Client ID** and **Client secret**.
 
 ### 2. Configure Ingot

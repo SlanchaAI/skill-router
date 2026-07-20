@@ -59,6 +59,30 @@ def test_identity_defaults_to_viewer_with_no_matching_claims():
     assert ident["role"] == "viewer"
 
 
+def test_admin_satisfies_every_role_requirement():
+    # role inheritance: admin must pass every gate without special-casing (rank comparison,
+    # never exact match)
+    for required in rbac.ROLES:
+        rbac.authorize("admin", required)             # no raise
+
+
+def test_role_map_matching_is_exact_and_case_sensitive():
+    role_map = {"g-admin": "admin"}
+    assert rbac.role_from_claims(["G-Admin"], role_map) == "viewer"    # case differs: no grant
+    assert rbac.role_from_claims(["g-admin-2"], role_map) == "viewer"  # no prefix/substring match
+    assert rbac.role_from_claims([" g-admin"], role_map) == "viewer"   # no trimming of claim values
+
+
+def test_role_from_claims_handles_none():
+    assert rbac.role_from_claims(None, {"g-admin": "admin"}) == "viewer"
+
+
+def test_identity_from_empty_claims_is_anonymous_viewer():
+    # a token with none of the optional claims yields empty identity fields and the floor role,
+    # not a KeyError
+    assert rbac.identity_from_claims({}) == {"sub": "", "email": "", "name": "", "role": "viewer"}
+
+
 def test_malformed_role_claims_fail_closed_not_crash():
     # a malformed claim shape must yield no roles (viewer), never a TypeError -> 500
     role_map = {"g-admin": "admin"}

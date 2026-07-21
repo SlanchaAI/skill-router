@@ -20,7 +20,8 @@ Three properties, all defaults, none optional:
   for open models on serverless, under its own retention policy.
 - **Self-hosted tracing.** Traces default to a local JSONL store on your machine; the full Langfuse
   stack (Postgres, ClickHouse, MinIO) runs self-hosted inside the compose stack under
-  `--profile langfuse`. Either way, traces, skill contents, and eval outputs never leave your machine.
+  `--profile langfuse`. Either way the trace store stays on your machine (hosted inference is the
+  separate exception noted below).
 - **Localhost only.** No service is reachable off the machine (see
   [Network exposure](#network-exposure)).
 

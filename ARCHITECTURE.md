@@ -27,7 +27,8 @@ exposes only loopback ports.
    champion has moved is refused before the approval click rather than after it.
 5. Rollback restores any snapshot the same way, and also snapshots what it displaces.
 6. Approval and rollback append metadata-only records to `runs/approval-audit.jsonl`. The actor is
-   always `local-operator`: the local UI has no identity or authentication.
+   the approver's authenticated identity (HTTP Basic username or OIDC email), or `local-operator` in
+   the zero-config open mode (see [SECURITY.md](SECURITY.md)).
 
 ## Serving path
 
@@ -135,9 +136,10 @@ revision the approval trail last recorded.
 
 Lite mode runs MCP and the UI, with one-shot agent and candidate-generation containers on demand.
 The optional `langfuse` profile adds local observability services. Fully local inference points model
-URLs to vLLM or Ollama. Hosted inference sends prompts and outputs to the selected provider. None of
-these modes adds endpoint authentication, so non-loopback publishing requires an authenticating proxy
-and authorization appropriate to the available tools.
+URLs to vLLM or Ollama. Hosted inference sends prompts and outputs to the selected provider. Endpoint
+auth is independent of these modes: the UI has its own password/OIDC gate (`AUTH_MODE`), but MCP has
+none, so publishing MCP off-loopback requires an authenticating proxy and authorization appropriate to
+the available tools.
 
 ## Failure and recovery
 
@@ -165,7 +167,8 @@ candidate-generation and review services for execution-grounded judging. Do not 
 for untrusted users. Prefer a dedicated Docker context or isolated host, and omit the socket when
 using static checks.
 
-MCP and UI are unauthenticated, so anyone who can reach the UI can approve a change or roll one back.
+MCP has no built-in authentication; the UI carries a password gate (or optional OIDC), unauthenticated
+only in the zero-config open mode, where anyone who can reach it can approve a change or roll one back.
 Skills can contain hostile instructions or executable assets. Hosted providers receive model traffic.
 Local traces can contain task and answer text. These boundaries and concrete deployment safeguards
 are expanded in [SECURITY.md](SECURITY.md).

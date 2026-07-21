@@ -69,6 +69,9 @@ them). Backend, model, and gate settings live in [Configuration](docs/configurat
 Then walk the full loop, a stale Tailwind skill mined, rewritten, gated, and promoted, in the
 [**Tutorial**](docs/tutorial.md).
 
+For a hardened open source Langfuse deployment with agents on other LAN machines, follow
+[Production setup](PRODUCTION_SETUP.md).
+
 ### Connect Claude Code or Codex
 
 You can use Ingot with your existing coding agent instead of the bundled demo agent. Start the
@@ -84,6 +87,17 @@ docker compose up -d
 ./scripts/claude_setup.sh
 # or
 ./scripts/codex_setup.sh
+```
+
+Both scripts are safe to run again. Use `--doctor` to inspect versions, installed connectors,
+configuration, and Langfuse reachability without changing anything. Use `--repair` to replace a
+mismatched MCP registration and reinstall managed dependencies or plugins:
+
+```bash
+./scripts/claude_setup.sh --doctor
+./scripts/claude_setup.sh --repair
+./scripts/codex_setup.sh --doctor
+./scripts/codex_setup.sh --repair
 ```
 
 Each script adds `http://localhost:8000/mcp` as the user-level `ingot` MCP server and installs the
@@ -107,6 +121,7 @@ for sessions whose contents must not be stored in Langfuse. Their trace-root sha
 [Bring your own agent](docs/mcp-integration.md) for the trace contract and routing behavior.
 Tell the agent to call `ingot.route_and_load` once at the start of each request and follow the
 returned `skill_body`; connecting the MCP server makes the tool available but does not force its use.
+For an agent on another machine, see [Agent on another LAN machine](docs/mcp-integration.md#agent-on-another-lan-machine).
 Verify that the services are reachable before starting the agent:
 
 ```bash

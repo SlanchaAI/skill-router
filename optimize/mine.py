@@ -179,12 +179,12 @@ def _train_dupes(vecs, skill: str, norm_embed, log):
 
 
 def _normalized_embedder():
-    """Return an embedding function that produces row-normalized float vectors."""
+    """Return an embedding function that produces row-normalized float vectors. Task-to-task
+    similarity (diversity + train-dup checks), so both sides use the document embedding."""
     import numpy as np
-    from fastembed import TextEmbedding
-    from mcp_server.router import _MODEL
+    from mcp_server.embedding import build_embedding
 
-    embedder = TextEmbedding(model_name=_MODEL)
+    embedder = build_embedding()
 
     def norm_embed(texts):
         matrix = np.array(list(embedder.embed(texts)), dtype=np.float32)

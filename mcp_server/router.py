@@ -1,9 +1,10 @@
 """Tier-1 embedding router: embed every skill's description once, then suggest the top-k skills for a
-task by cosine similarity. CPU-only via fastembed (ONNX), no GPU, so the demo is `docker compose up`.
+task by cosine similarity. CPU-only ONNX, no GPU, so the demo is `docker compose up`.
 
-Model is `EMBED_MODEL` (default bge-small, fast + tiny). Any fastembed model works, e.g.
-`BAAI/bge-large-en-v1.5` (1024-dim, more accurate) at ~10x the per-query and index-build cost on CPU.
-A stronger model like Qwen3-Embedding-0.6B belongs on the GPU/vLLM path, not this portable CPU demo."""
+Model is `EMBED_MODEL` (default Qwen3-Embedding-0.6B q4, ~15 ms/query on CPU; queries get the
+retrieval instruction prefix, descriptions don't). Any fastembed model name also works (e.g. the
+previous default `BAAI/bge-small-en-v1.5`, ~4 ms/query), but recalibrate MIN_SCORE /
+RELATED_SCORE / COLLISION_SCORE with the model (mcp_server/embedding.py)."""
 from __future__ import annotations
 import os
 import sys
@@ -11,11 +12,9 @@ import threading
 from pathlib import Path
 
 import numpy as np
-from fastembed import TextEmbedding
 
+from .embedding import EMBED_MODEL as _MODEL, build_embedding
 from .registry import Skill
-
-_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 
 
 class Router:
@@ -24,7 +23,7 @@ class Router:
 
     def __init__(self, skills: list[Skill]):
         self.skills = skills
-        self._embed = TextEmbedding(model_name=_MODEL)
+        self._embed = build_embedding()
         if not skills:  # empty library, don't normalize an empty matrix
             self._mat = np.zeros((0, 0), dtype=np.float32)
             return
@@ -54,7 +53,7 @@ class Router:
     def suggest(self, task: str, k: int = 5, min_score: float = 0.0) -> list[dict]:
         if not self.skills:
             return []
-        q = np.array(next(iter(self._embed.embed([task]))), dtype=np.float32)
+        q = np.array(next(iter(self._embed.embed_query([task]))), dtype=np.float32)
         q = q / (np.linalg.norm(q) + 1e-8)
         scores = self._mat @ q
         top = np.argsort(-scores)[:k]
@@ -105,7 +104,7 @@ class Router:
         )]
         if not eligible:
             return []
-        query = np.array(next(iter(self._embed.embed([task]))), dtype=np.float32)
+        query = np.array(next(iter(self._embed.embed_query([task]))), dtype=np.float32)
         query = query / (np.linalg.norm(query) + 1e-8)
         index_by_name = {skill.name: index for index, skill in enumerate(self.skills)}
         return sorted(
@@ -166,8 +165,8 @@ class Router:
         }
 
     def route(self, task: str, harness: str, cwd: str, available_tools=(), available_mcps=(),
-              platform: str | None = None, min_score: float = 0.65,
-              related_score: float = 0.45) -> dict:
+              platform: str | None = None, min_score: float = 0.53,
+              related_score: float = 0.37) -> dict:
         """Filter compatible skills, rank them locally, and return at most one instruction body.
         `novel` is the escalation signal for the calling harness: True when nothing compatible is
         even related (best score below `related_score`), the case where a weak/strong setup should

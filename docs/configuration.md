@@ -10,15 +10,15 @@ Set in `.env` (never committed):
 | `MODEL_BASE_URL` / `MODEL_API_KEY` | `BASE_URL` / `API_KEY` | serving-role-only overrides for hybrid setups |
 | `OPENROUTER_PROVIDERS` | (none) | OpenRouter only: provider priority (e.g. `fireworks,groq`), tried in order; composes with ZDR, and roles no listed provider serves fall back to the open ZDR pool |
 | `GEPA_MODEL` | `z-ai/glm-5.2` | the teacher model: writes candidate skills, and reflects for the description pass. Legacy name, kept so existing `.env` files work |
-| `STRONG_MODEL` | `GEPA_MODEL` | serves novel requests (no skill matched) and authors the new skill |
+| `STRONG_MODEL` | `GEPA_MODEL` | serves novel requests (no skill matched) |
 | `JUDGE_MODEL` | `google/gemini-2.5-flash` | the LLM judge; must differ from `GEPA_MODEL` |
-| `MIN_SCORE` | `0.65` | at/above: routable match; below: `related` band or novel |
-| `RELATED_SCORE` | `0.45` | floor of the `related` band; below it a task is novel (weak/strong escalation) |
-| `EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | router embedding model; keep in sync with the Dockerfile's build arg |
+| `MIN_SCORE` | `0.53` | at/above: routable match; below: `related` band or novel. Calibrated to `EMBED_MODEL` (0.65 for bge-small) |
+| `RELATED_SCORE` | `0.37` | floor of the `related` band; below it a task is novel (weak/strong escalation). Calibrated to `EMBED_MODEL` (0.45 for bge-small) |
+| `EMBED_MODEL` | `onnx-community/Qwen3-Embedding-0.6B-ONNX` | router embedding model (q4 ONNX, ~15 ms/query on CPU; +7 top-1 over bge-small on a 297-query eval). Any fastembed name also works, but recalibrate the three score thresholds with it. Keep in sync with the Dockerfile's build arg |
 | `BODY_TARGET_CHARS` | `6000` | length penalty starts past this body size |
 | `LENGTH_PENALTY` | `0.10` | max score subtracted for a very long body |
 | `LOOP_HEALTH_THRESHOLD` | `0.7` | the background loop proposes a change for skills whose mined mean score is below this |
-| `LOOP_PASSES` | `body` | passes the loop runs per unhealthy skill, in order (e.g. `body,description`) |
+| `LOOP_PASSES` | `body` | passes the loop runs per unhealthy skill, in order (e.g. `body,description,scripts`; `scripts` is skipped per skill without bundled scripts or exec checks) |
 | `SKILLOPT_EPOCHS` | `2` | body pass: passes over the train set |
 | `SKILLOPT_MINIBATCH` | `3` | body pass: train tasks reflected on per step |
 | `SKILLOPT_MAX_EDITS` | `3` | body pass: ceiling on edits applied per step (the learning-rate cap) |
@@ -33,8 +33,6 @@ Set in `.env` (never committed):
 | `EXEC_SANDBOX` | `docker` | `docker` = locked-down container, `1` = bare subprocess (legacy), `off` = static checks only |
 | `SANDBOX_IMAGE` | `ingot-optimize` | image sandbox containers run |
 | `SANDBOX_RUNTIME` | (none) | optional container runtime, e.g. `runsc` for gVisor |
-| `SKILL_MAX_DESCRIPTION` | `1024` | `create_skill` description cap (Agent Skills spec) |
-| `SKILL_MAX_BODY` | `40000` | `create_skill` body ceiling (~500 lines) |
 | `TRACES_FILE` | `runs/traces.jsonl` | local JSONL trace store: written by every agent run, read by `optimize-mine` when Langfuse is unreachable, so mining works without the tracing stack |
 | `SKILL_USAGE_FILE` | `runs/skill_usage.json` | per-skill load counter: the MCP server increments it on every `get_skill` / `route_and_load` match, and the UI shows each skill's `uses` |
 | `AUTH_USER` / `AUTH_PASSWORD` | `admin` / `ingot` (compose) | UI login (HTTP Basic). docker-compose sets these so the shared UI is gated by default, **change `AUTH_PASSWORD`** before exposing it; set `AUTH_PASSWORD=` empty to run open |

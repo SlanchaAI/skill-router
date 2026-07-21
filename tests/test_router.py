@@ -47,14 +47,13 @@ def test_router_reuses_description_vectors_across_refreshes(monkeypatch):
     calls = []
 
     class FakeEmbedding:
-        def __init__(self, model_name):
-            pass
-
         def embed(self, texts):
             calls.append(list(texts))
             return iter(np.array([1.0, 0.0], dtype=np.float32) for _ in texts)
 
-    monkeypatch.setattr(router_mod, "TextEmbedding", FakeEmbedding)
+        embed_query = embed
+
+    monkeypatch.setattr(router_mod, "build_embedding", lambda: FakeEmbedding())
     router_mod.Router._vector_cache.clear()
     skills = [SKILLS[0], SKILLS[1]]
     router_mod.Router(skills)
@@ -111,7 +110,7 @@ def test_route_novel_flag_signals_weak_strong_escalation():
     assert related["skill_root"] == "/pdf"
     assert related["revision"] == "rev-pdf"
     assert all("skill_body" not in item for item in related["alternatives"])
-    # nothing even related -> the harness should escalate to its strong model + create_skill
+    # nothing even related -> the harness should escalate to its strong model
     novel = router.route("photosynthesis in plants", "codex", "/tmp",
                          min_score=0.99, related_score=0.98)
     assert novel["match"] is None and novel["novel"] is True

@@ -623,12 +623,17 @@ async function rollback(skill) {
     (await j(`/api/rollback/${skill}/${revision}`, {method: "POST"})).result);
 }
 
+let skillsSignature = null;
+
 function renderSkills(skills) {
+  const signature = JSON.stringify(skills);
+  if (signature === skillsSignature) return;
   if (!skills.length) {
     $("#skills-list").innerHTML =
       `<div class="empty"><div class="et">No skills registered.</div>
        <div class="ed">Fetch or create skills under <code>skills/&lt;name&gt;/SKILL.md</code>
        and they will appear here.</div></div>`;
+    skillsSignature = signature;
     return;
   }
   const ordered = [...skills].sort((a, b) => (b.pending - a.pending) || (b.has_tasks - a.has_tasks));
@@ -648,34 +653,42 @@ function renderSkills(skills) {
           ${s.status === "running" ? "generating…" : "Generate candidate"}</button>
       </div>
     </div>`).join("");
+  skillsSignature = signature;
 }
 
 // One failing endpoint must not blank the board: each section renders from what it got, and says
 // so when its own data is missing, instead of the whole poll rejecting and leaving stale or empty
 // panels with no explanation.
+let refreshing = false;
 async function refresh() {
-  const [skills, runs, hist] = (await Promise.allSettled(
-    [j("/api/skills"), j("/api/runs"), j("/api/history")]))
-    .map(r => r.status === "fulfilled" ? r.value : null);
+  if (document.hidden || refreshing) return;
+  refreshing = true;
+  try {
+    const [skills, runs, hist] = (await Promise.allSettled(
+      [j("/api/skills"), j("/api/runs"), j("/api/history")]))
+      .map(r => r.status === "fulfilled" ? r.value : null);
 
-  if (skills) {
-    renderSkills(skills);
-    renderBoard(skills, skills.filter(s => s.has_tasks), hist);
-    clearLoadError("#skills-msg");
-  } else {
-    say("#skills-msg", "⛔ could not load skills; retrying every 3s", true, "load");
-  }
-  if (hist) { renderHistory(hist); clearLoadError("#history-msg"); }
-  else { say("#history-msg", "⛔ could not load history; retrying every 3s", true, "load"); }
-  if (!booted && skills) { staggerIn("#attention .alert"); staggerIn("#skills-list .srow"); booted = true; }
+    if (skills) {
+      renderSkills(skills);
+      renderBoard(skills, skills.filter(s => s.has_tasks), hist);
+      clearLoadError("#skills-msg");
+    } else {
+      say("#skills-msg", "⛔ could not load skills; retrying every 3s", true, "load");
+    }
+    if (hist) { renderHistory(hist); clearLoadError("#history-msg"); }
+    else { say("#history-msg", "⛔ could not load history; retrying every 3s", true, "load"); }
+    if (!booted && skills) { staggerIn("#attention .alert"); staggerIn("#skills-list .srow"); booted = true; }
 
-  const active = Object.entries(runs || {}).filter(([, r]) => r.log.length);
-  if (active.length) {
-    $("#run-section").hidden = false;
-    $("#log").textContent = active.map(([s, r]) => r.log.map(l => `[${s}] ${l}`).join("\n")).join("\n");
-    $("#log").scrollTop = $("#log").scrollHeight;
+    const active = Object.entries(runs || {}).filter(([, r]) => r.log.length);
+    if (active.length) {
+      $("#run-section").hidden = false;
+      $("#log").textContent = active.map(([s, r]) => r.log.map(l => `[${s}] ${l}`).join("\n")).join("\n");
+      $("#log").scrollTop = $("#log").scrollHeight;
+    }
+    if (skills) syncReviewCard(skills);
+  } finally {
+    refreshing = false;
   }
-  if (skills) syncReviewCard(skills);
 }
 
 // The card on screen can stop being reviewable while the reviewer is looking at it: they approved
@@ -877,6 +890,9 @@ j("/api/config").then(c => {
   $("#lf").href = c.langfuse_url; $("#lf2").href = c.langfuse_url;
 });
 refresh(); setInterval(refresh, 3000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+});
 
 // scroll-reveal: enhance already-visible scaffold only (reduced-motion honored via CSS)
 if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {

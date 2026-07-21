@@ -5,8 +5,8 @@
 </p>
 
 - **`mcp_server/`**: [FastMCP](https://github.com/jlowin/fastmcp) v3 server (HTTP transport), six tools:
-  - `suggest_skills(task, k)`: routable matches by embedding similarity (CPU
-    [fastembed](https://github.com/qdrant/fastembed), no GPU); near-misses come back flagged
+  - `suggest_skills(task, k)`: routable matches by embedding similarity (Qwen3-Embedding-0.6B
+    q4 on CPU ONNX Runtime, no GPU; any fastembed model via `EMBED_MODEL`); near-misses come back flagged
     `related`; empty = truly novel
   - `get_skill(name)`: the full SKILL.md; the header line carries the content-hash revision
   - `list_skills()`: every skill's name, routing description, and load count (`uses`)

@@ -47,14 +47,13 @@ def test_router_reuses_description_vectors_across_refreshes(monkeypatch):
     calls = []
 
     class FakeEmbedding:
-        def __init__(self, model_name):
-            pass
-
         def embed(self, texts):
             calls.append(list(texts))
             return iter(np.array([1.0, 0.0], dtype=np.float32) for _ in texts)
 
-    monkeypatch.setattr(router_mod, "TextEmbedding", FakeEmbedding)
+        embed_query = embed
+
+    monkeypatch.setattr(router_mod, "build_embedding", lambda: FakeEmbedding())
     router_mod.Router._vector_cache.clear()
     skills = [SKILLS[0], SKILLS[1]]
     router_mod.Router(skills)

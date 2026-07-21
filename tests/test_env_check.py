@@ -1,7 +1,15 @@
 """The optimizer CLIs preflight OPENROUTER_API_KEY and exit with setup help, not a mid-run 401."""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from optimize import require_openrouter_key
+
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_missing_key_exits_with_setup_help(monkeypatch, capsys):
@@ -170,6 +178,30 @@ def test_skillopt_model_resolution(monkeypatch):
     assert skillopt_model() == "z-ai/glm-5.2"
     monkeypatch.setenv("SKILLOPT_MODEL", "author/model")
     assert skillopt_model() == "author/model"
+
+
+def test_skillopt_model_reaches_every_authoring_role():
+    env = {**os.environ, "SKILLOPT_MODEL": "author/model",
+           "JUDGE_MODEL": "different/judge"}
+    code = """
+import optimize.draft as draft
+import optimize.rollout as rollout
+from optimize.usage import _role_models
+assert draft.MODEL == 'author/model'
+assert rollout.SKILLOPT_MODEL == 'author/model'
+assert _role_models()['reflection'] == 'author/model'
+"""
+    subprocess.run([sys.executable, "-c", code], env=env, cwd=ROOT,
+                   text=True, capture_output=True, check=True)
+
+
+def test_judge_warns_when_skillopt_model_is_the_grader():
+    env = {**os.environ, "SKILLOPT_MODEL": "same/model", "JUDGE_MODEL": "same/model"}
+
+    result = subprocess.run([sys.executable, "-c", "import optimize.judge"], env=env,
+                            cwd=ROOT, text=True, capture_output=True, check=True)
+
+    assert "author == grader" in result.stdout
 
 
 def test_preflight_checks_strong_model_only_when_explicitly_set(monkeypatch):

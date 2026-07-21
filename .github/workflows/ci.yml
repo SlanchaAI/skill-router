@@ -14,3 +14,5 @@ jobs:
         run: docker build -t ingot-mcp .
       - name: Run tests
         run: docker run --rm -v "$PWD:/app" -w /app ingot-mcp python -m pytest tests -q
+      - name: Smoke test Compose and Langfuse TLS
+        run: ./scripts/compose_smoke.sh

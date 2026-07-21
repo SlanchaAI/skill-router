@@ -61,6 +61,56 @@ bundled local Langfuse. Point it at another project by setting `LANGFUSE_BASE_UR
 `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` for the setup command. Set `INGOT_MCP_URL` for
 either script when Ingot is not running on localhost.
 
+Both scripts are idempotent: an already-correct MCP registration, marketplace, plugin, and SDK are
+left alone. Diagnose an incomplete setup without changing it, or repair the state managed by a
+script, with:
+
+```bash
+./scripts/claude_setup.sh --doctor
+./scripts/claude_setup.sh --repair
+./scripts/codex_setup.sh --doctor
+./scripts/codex_setup.sh --repair
+```
+
+`--doctor` reports dependency versions, connector state, local configuration, and Langfuse health,
+then exits nonzero when required installed state is missing. `--repair` replaces an `ingot` MCP
+entry whose URL differs from `INGOT_MCP_URL`, upgrades required dependencies, and reinstalls the
+managed observability plugin. If a normal setup command fails, its error points to these modes.
+
+### Agent on another LAN machine
+
+Run the setup script on the machine where Claude Code or Codex runs, and use URLs that machine can
+reach. For example, if the Ingot host is `192.168.1.40`:
+
+```bash
+# On the remote Claude Code machine
+INGOT_MCP_URL=http://192.168.1.40:8000/mcp ./scripts/claude_setup.sh
+
+# On the remote Codex machine
+INGOT_MCP_URL=http://192.168.1.40:8000/mcp \
+LANGFUSE_BASE_URL=https://192.168.1.40:3443 \
+LANGFUSE_PUBLIC_KEY=pk-lf-... \
+LANGFUSE_SECRET_KEY=sk-lf-... \
+./scripts/codex_setup.sh
+```
+
+The default Compose MCP publish is deliberately loopback-only. On the Ingot host, expose only the
+MCP port on a trusted interface with a small override file:
+
+```yaml
+# compose.agent-lan.yml
+services:
+  mcp:
+    ports: !override
+      - "192.168.1.40:8000:8000"
+```
+
+Start it with `docker compose -f docker-compose.yml -f compose.agent-lan.yml up -d`. For Langfuse,
+follow the secure LAN setup in [Security](security.md#network-exposure), including rotated secrets,
+the `langfuse-lan` TLS profile, and trusting Caddy's local CA on the agent machine. Do not use a
+`localhost` Langfuse URL in a remote setup, because that points back to the agent machine. MCP has
+no built-in authentication, so do not publish port 8000 to an untrusted network or the internet.
+
 After setup, restart the agent and tell it to call `ingot.route_and_load` once at the start of each
 request. Registration exposes the tool but does not force the agent to use it.
 

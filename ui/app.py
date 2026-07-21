@@ -96,6 +96,36 @@ def config():
     return {"langfuse_url": os.environ.get("LANGFUSE_PUBLIC_URL", "http://localhost:3100")}
 
 
+_SKILLS_CACHE = None
+_SKILLS_CACHE_KEY = None
+
+
+def _get_skills_cache_key():
+    """Fast cache key based on mtime of skill directories and SKILL.md files."""
+    from mcp_server.registry import configured_roots, skill_sources
+    roots = configured_roots()
+    mtimes = [id(load_skills)]
+    for r in roots:
+        if r.exists():
+            mtimes.append((str(r), r.stat().st_mtime))
+            for src in skill_sources(r):
+                mtimes.append((str(src), src.stat().st_mtime))
+                skill_dir = src.parent
+                mtimes.append((str(skill_dir), skill_dir.stat().st_mtime))
+    return tuple(mtimes)
+
+
+def _cached_load_skills():
+    global _SKILLS_CACHE, _SKILLS_CACHE_KEY
+    current_key = _get_skills_cache_key()
+    if _SKILLS_CACHE is not None and current_key == _SKILLS_CACHE_KEY:
+        return _SKILLS_CACHE
+    skills_list = load_skills()
+    _SKILLS_CACHE = skills_list
+    _SKILLS_CACHE_KEY = current_key
+    return skills_list
+
+
 @app.get("/api/skills")
 def skills():
     tasksets = {p.stem for p in TASKS_DIR.glob("*.yaml")}
@@ -106,7 +136,7 @@ def skills():
          "pending": load_pending(s.name) is not None, "revision": s.revision,
          "uses": counts.get(s.name, 0),
          "status": RUNS.get(s.name, {}).get("status")}
-        for s in load_skills()
+        for s in _cached_load_skills()
         if SLUG_RE.fullmatch(s.name)  # a non-slug name (hostile frontmatter) can't be optimized anyway
     ]
 
@@ -122,6 +152,8 @@ def optimize(skill: str):
 
     def log(*args):
         state["log"].append(" ".join(str(a) for a in args))
+        if len(state["log"]) > 1000:
+            state["log"] = state["log"][-1000:]
 
     threading.Thread(target=_run_optimization, args=(skill, state, log), daemon=True).start()
     return {"started": skill}

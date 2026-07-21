@@ -16,7 +16,7 @@ def load_cases(path: Path) -> list[dict]:
     return cases
 
 
-def evaluate_cases(router, cases: list[dict], *, min_score: float = 0.65) -> dict:
+def evaluate_cases(router, cases: list[dict], *, min_score: float = 0.53) -> dict:
     positives = top1_hits = recall_hits = 0
     no_route = no_route_hits = 0
     failures = []
@@ -55,7 +55,7 @@ def evaluate_cases(router, cases: list[dict], *, min_score: float = 0.65) -> dic
     }
 
 
-def evaluate_parity(router, cases: list[dict], *, min_score: float = 0.65) -> dict:
+def evaluate_parity(router, cases: list[dict], *, min_score: float = 0.53) -> dict:
     selected = [case for case in cases if case.get("parity")]
     failures = []
     for index, case in enumerate(selected):

@@ -17,11 +17,16 @@ RUN arch=$([ "${TARGETARCH:-$(dpkg --print-architecture)}" = "arm64" ] && echo a
     && mv /tmp/docker/docker /usr/local/bin/docker \
     && rm -rf /tmp/docker.tgz /tmp/docker
 
-# Pre-download the CPU embedding model so the demo runs offline (no runtime download).
-# Override with --build-arg EMBED_MODEL=... to bake a different fastembed model (keep it in sync
-# with the EMBED_MODEL env the server reads, or the model downloads on first boot instead).
-ARG EMBED_MODEL=BAAI/bge-small-en-v1.5
-RUN python -c "from fastembed import TextEmbedding; TextEmbedding('${EMBED_MODEL}')"
+# Pre-download the CPU embedding models so the demo runs offline (no runtime download):
+# the Qwen3 q4 ONNX router default (~460MB), plus the bge-small fastembed fallback (~34MB) so an
+# EMBED_MODEL override to the previous default also works offline. Keep these in sync with the
+# EMBED_MODEL / EMBED_ONNX_FILE envs the server reads, or the model downloads on first boot.
+ARG EMBED_MODEL=onnx-community/Qwen3-Embedding-0.6B-ONNX
+ARG EMBED_ONNX_FILE=onnx/model_q4.onnx
+RUN python -c "from huggingface_hub import hf_hub_download as fetch; \
+fetch('${EMBED_MODEL}', 'tokenizer.json'); fetch('${EMBED_MODEL}', '${EMBED_ONNX_FILE}')"
+ARG FALLBACK_EMBED_MODEL=BAAI/bge-small-en-v1.5
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('${FALLBACK_EMBED_MODEL}')"
 
 COPY mcp_server ./mcp_server
 COPY agent ./agent

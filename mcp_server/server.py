@@ -10,8 +10,8 @@ from . import usage_counts
 from .registry import configured_roots, load_skills
 from .router import Router
 
-MIN_SCORE = float(os.environ.get("MIN_SCORE", "0.65"))
-RELATED_SCORE = float(os.environ.get("RELATED_SCORE", "0.45"))
+MIN_SCORE = float(os.environ.get("MIN_SCORE", "0.53"))
+RELATED_SCORE = float(os.environ.get("RELATED_SCORE", "0.37"))
 PORT = int(os.environ.get("PORT", "8000"))
 # Loopback by default: the tools are unauthenticated, so a bare `python -m mcp_server.server` must
 # not listen on the network. The compose mcp service sets HOST=0.0.0.0 (required for Docker port

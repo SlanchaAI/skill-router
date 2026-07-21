@@ -39,7 +39,7 @@ PROMOTE_MIN_MARGIN = float(os.environ.get("PROMOTE_MIN_MARGIN", "0.15"))   # mea
 # judge noise alone, so a smaller margin can promote a challenger that isn't actually better.
 PROMOTE_MIN_SAMPLES = int(os.environ.get("PROMOTE_MIN_SAMPLES", "3"))       # min held-out tasks
 PASS = float(os.environ.get("PROMOTE_PASS_SCORE", "0.5"))                   # a task "passes" at/above this
-COLLISION_SCORE = float(os.environ.get("COLLISION_SCORE", "0.93"))          # route-shadow cutoff
+COLLISION_SCORE = float(os.environ.get("COLLISION_SCORE", "0.94"))          # route-shadow cutoff
 RETENTION_WARN = float(os.environ.get("RETENTION_WARN", "0.5"))             # body-retention review warning
 # Acceptance violations block promotion only past this fraction of holdout answers; a smaller
 # share is a review warning (a large improvement shouldn't be auto-killed by a residual model

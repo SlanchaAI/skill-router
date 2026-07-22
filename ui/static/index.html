@@ -169,7 +169,7 @@
   .btn.danger { border-color: var(--fail); background: var(--fail); color: var(--paper); }
   .btn.danger:hover:not(:disabled) { filter: brightness(.92); }
 
-  /* Promotion comparison modal (two-step approve) */
+  /* Promotion comparison modal */
   .cmp-overlay { position: fixed; inset: 0; background: rgba(15,20,32,.6); z-index: 50;
     display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
   .cmp-overlay[hidden] { display: none; }
@@ -257,10 +257,17 @@
   .audit .aact { font-weight: 700; color: var(--rust); text-transform: uppercase; }
   .audit .aact.reject { color: var(--fail); }   /* a discarded challenger reads distinct from a promotion */
 
-  /* ---- candidate-generation log ---- */
-  .log { font-family: var(--mono); font-size: .74rem; line-height: 1.6; margin-top: 1.1rem;
+  /* SkillOpt run log, nested under the skill being optimized */
+  .skill-run { flex: 1 0 100%; min-width: 0; margin-top: .25rem; }
+  .skill-run-head { display: flex; justify-content: space-between; gap: .75rem; margin-bottom: .35rem;
+    font: 600 .66rem/1.4 var(--mono); color: var(--rust); text-transform: uppercase;
+    letter-spacing: .06em; }
+  .skill-run-head .count { color: var(--ink-3); font-weight: 400; }
+  .skill-run-note { margin: 0 0 .45rem; font: .72rem/1.5 var(--mono); color: var(--ink-2); }
+  .skill-run-log { font-family: var(--mono); font-size: .74rem; line-height: 1.6; margin: 0;
     background: var(--paper-2); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-sm);
-    padding: .85rem 1rem; overflow: auto; max-height: 22rem; white-space: pre-wrap; color: var(--ink-2); }
+    padding: .85rem 1rem; overflow: auto; max-height: 18rem; white-space: pre-wrap; color: var(--ink-2); }
+  .skill-run.error .skill-run-head { color: var(--fail); }
 
   /* ---- review: champion vs challenger ---- */
   .duel { display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: stretch; margin-top: 1.3rem; }
@@ -396,7 +403,6 @@
     <a class="lnk" href="#review-section">Review</a>
     <a class="lnk" href="#history-section">History</a>
     <a class="lnk" href="#skills">Skills</a>
-    <a class="lnk" href="#run-section">Activity</a>
     <a class="lnk ext" id="lf" href="#" target="_blank" rel="noopener">Langfuse</a>
     <span class="pill idle" id="status-pill">…</span>
     <span class="who" id="who" hidden><span id="who-email"></span>
@@ -431,7 +437,7 @@
   <section class="band reveal" id="review-section">
     <div class="band-head"><span><span class="n">/</span> REVIEW</span>
       <span class="side">evidence and decision</span></div>
-    <h2 class="head" id="pending-heading">Pending change</h2>
+    <h2 class="head" id="pending-heading" tabindex="-1">Pending change</h2>
     <p class="sub" id="pending-copy">Inspect every changed instruction before approval.</p>
     <div class="review-card" id="pending-card" hidden>
       <div class="beam" aria-hidden="true"></div>
@@ -468,7 +474,6 @@
       <div class="cmp-actions">
         <button class="btn" id="cmp-cancel2">Cancel</button>
         <button class="btn primary" id="cmp-approve">Approve &amp; promote</button>
-        <button class="btn danger" id="cmp-confirm" hidden>Confirm, promote now</button>
       </div>
       <span class="msg" id="cmp-msg"></span>
     </div>
@@ -543,14 +548,6 @@
     <div class="review-actions"><span class="msg" id="skills-msg"></span></div>
   </section>
 
-  <section class="band" id="run-section" hidden>
-    <div class="band-head"><span><span class="n">/</span> ACTIVITY</span>
-      <span class="side">SkillOpt run log</span></div>
-    <h2 class="head">SkillOpt optimization log</h2>
-    <p class="sub">Live output from SkillOpt training and the held-out A/B. One run at a time.</p>
-    <pre class="log" id="log"></pre>
-  </section>
-
   <div class="footer">
     <span><span class="k">ingot</span> · evidence-gated change control · atomic promotion, revisioned rollback</span>
     <span>hot-reload on approve</span>
@@ -561,7 +558,8 @@
 const $ = s => document.querySelector(s);
 let langfuseUrl = "#", currentPending = null, currentPendingData = null;
 let booted = false;  // entrance animations run on first paint only; 3s refreshes stay still
-let boardSignature = null, skillInventory = [];
+let boardSignature = null, skillInventory = [], runInventory = {}, revisionInventory = {};
+let revisionInventoryReady = false;
 const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // count-up on KPI values (structure: Magic UI number-ticker, vanilla rAF instead of a spring)
@@ -667,7 +665,7 @@ function renderBoard(skills, withTasks, history) {
   if (pending) alerts.push(alert("act", "REVIEW",
     `${pending} change${pending > 1 ? "s" : ""} quarantined and awaiting your decision.`));
   if (running) alerts.push(alert("info", "OPTIMIZING",
-    "a SkillOpt run is in progress; watch the log."));
+    "a SkillOpt run is in progress; follow it under the skill."));
   if (!pending && !running) alerts.push(alert("ok", "CLEAR",
     "nothing quarantined; every skill is serving its approved revision."));
   if (!withTasks.length) alerts.push(alert("info", "NO EVALS",
@@ -745,10 +743,15 @@ async function rollback(skill) {
 
 let skillsSignature = null;
 
-function renderSkills(skills) {
-  const signature = JSON.stringify(skills);
+function renderSkills(skills, runs = {}, history = null) {
+  if (history) {
+    revisionInventory = history.revisions || {};
+    revisionInventoryReady = true;
+  }
+  const signature = JSON.stringify({skills, runs, revisionInventory, revisionInventoryReady});
   if (signature === skillsSignature) return;
   skillInventory = skills;
+  runInventory = runs;
   skillsSignature = signature;
   renderSkillRows();
 }
@@ -778,23 +781,43 @@ function renderSkillRows() {
     return;
   }
   const ordered = [...visible].sort((a, b) => (b.pending - a.pending) || (b.has_tasks - a.has_tasks));
-  $("#skills-list").innerHTML = ordered.map(s => `
-    <div class="srow${s.pending ? " pend" : ""}${s.has_tasks ? "" : " noev"}">
+  $("#skills-list").innerHTML = ordered.map(s => {
+    const run = runInventory[s.name];
+    const lines = run?.log || [];
+    const versionCount = 1 + (s.pending ? 1 : 0) + (revisionInventory[s.name] || []).length;
+    const versionChip = revisionInventoryReady
+      ? `<span class="chip mute" title="active, pending, and snapshotted versions">${versionCount} version${versionCount === 1 ? "" : "s"}</span>`
+      : `<span class="chip mute" title="revision history is still loading">versions …</span>`;
+    const runLog = run && (run.status === "running" || lines.length) ? `
+      <div class="skill-run${run.status === "error" ? " error" : ""}" role="log"
+        aria-live="polite" aria-relevant="additions text"
+        aria-label="SkillOpt log for ${esc(s.name)}">
+        <div class="skill-run-head"><span>SkillOpt ${esc(run.status || "running")}</span>
+          <span class="count">${lines.length} log line${lines.length === 1 ? "" : "s"}</span></div>
+        ${run.status === "running" ? `<p class="skill-run-note">Optimization can take a few minutes. This log updates automatically.</p>` : ""}
+        <pre class="skill-run-log">${esc(lines.length ? lines.join("\n") : "Waiting for the first log entry…")}</pre>
+      </div>` : "";
+    return `
+    <div class="srow${s.pending ? " pend" : ""}${s.has_tasks ? "" : " noev"}" data-skill="${esc(s.name)}">
       <button class="main skill-open" onclick="openSkillVersions('${esc(s.name)}')"
         aria-label="View ${esc(s.name)} versions and contents">
         <div class="nameline"><span class="sname">${esc(s.name)}</span>${statusChip(s)}
           ${s.revision ? `<span class="chip mute">rev ${esc(shortRev(s.revision))}</span>` : ""}
+          ${versionChip}
           ${s.uses ? `<span class="chip mute" title="times this skill's instructions were served">${s.uses} use${s.uses === 1 ? "" : "s"}</span>` : ""}</div>
         <p class="sdesc">${esc(s.description)}</p>
       </button>
       <div class="sactions">
-        ${s.pending ? `<button class="btn primary" onclick="showPending('${esc(s.name)}')">Review change</button>` : ""}
+        ${s.pending ? `<button class="btn primary" onclick="showPending('${esc(s.name)}', {scroll: true})">Review change</button>` : ""}
         <button class="btn" onclick="generateCandidate('${esc(s.name)}')"
           ${s.status === "running" || !s.has_tasks ? "disabled" : ""}
           ${s.has_tasks ? "" : `title="no eval task set; docker compose run --rm optimize ${esc(s.name)} auto-drafts one"`}>
           ${s.status === "running" ? "optimizing…" : "Optimize with SkillOpt"}</button>
       </div>
-    </div>`).join("");
+      ${runLog}
+    </div>`;
+  }).join("");
+  document.querySelectorAll(".skill-run-log").forEach(log => { log.scrollTop = log.scrollHeight; });
 }
 
 $("#skill-search").oninput = renderSkillRows;
@@ -871,7 +894,7 @@ async function refresh() {
       .map(r => r.status === "fulfilled" ? r.value : null);
 
     if (skills) {
-      renderSkills(skills);
+      renderSkills(skills, runs || runInventory, hist);
       renderBoard(skills, skills.filter(s => s.has_tasks), hist);
       clearLoadError("#skills-msg");
     } else {
@@ -881,12 +904,6 @@ async function refresh() {
     else { say("#history-msg", "⛔ could not load history; retrying every 3s", true, "load"); }
     if (!booted && skills) { staggerIn("#attention .alert"); staggerIn("#skills-list .srow"); booted = true; }
 
-    const active = Object.entries(runs || {}).filter(([, r]) => r.log.length);
-    if (active.length) {
-      $("#run-section").hidden = false;
-      $("#log").textContent = active.map(([s, r]) => r.log.map(l => `[${s}] ${l}`).join("\n")).join("\n");
-      $("#log").scrollTop = $("#log").scrollHeight;
-    }
     if (skills) syncReviewCard(skills);
   } finally {
     refreshing = false;
@@ -908,7 +925,7 @@ function syncReviewCard(skills) {
 // SkillOpt only ever writes a quarantined candidate.
 async function generateCandidate(skill) {
   await act("#skills-msg", async () =>
-    `started SkillOpt for '${(await j(`/api/optimize/${skill}`, {method: "POST"})).started}'`);
+    `started SkillOpt for '${(await j(`/api/optimize/${skill}`, {method: "POST"})).started}'; optimization can take a few minutes`);
 }
 
 function colorizeDiff(diff) {
@@ -973,7 +990,7 @@ function renderSideDiff(comparison) {
 
 // `keepMessage` is set when the poll switched cards by itself: a reviewer who just approved a
 // change has to keep reading "Promoted ...", while opening a card by hand clears the previous one.
-async function showPending(skill, {keepMessage = false} = {}) {
+async function showPending(skill, {keepMessage = false, scroll = false} = {}) {
   let p;
   try {
     p = await j(`/api/pending/${skill}`);
@@ -1057,10 +1074,14 @@ async function showPending(skill, {keepMessage = false} = {}) {
   if (!keepMessage) say("#pending-msg", "", false);
   $("#evidence-label").hidden = $("#evidence").hidden = false;
   showEvidence(skill);
+  if (scroll) {
+    $("#review-section").scrollIntoView({behavior: REDUCED ? "auto" : "smooth", block: "start"});
+    $("#pending-heading").focus({preventScroll: true});
+  }
 }
 
-// Approve opens a larger comparison panel (model breakdown, token usage, judge scores) with a
-// two-step confirm, so a promotion is never one careless click.
+// Approve opens a comparison panel with model, token, and per-task evidence. Its primary action is
+// the final promotion decision, so the user does not have to click a third confirmation button.
 const num = x => (x == null ? "," : Number(x).toFixed(0));
 const sc = x => (x == null ? "," : Number(x).toFixed(3));
 function delta(before, after, lowerBetter) {
@@ -1096,8 +1117,6 @@ function openCompare() {
   if (!p) return;
   $("#cmp-skill").textContent = currentPending;
   $("#cmp-body").innerHTML = buildCompare(p);
-  $("#cmp-approve").hidden = false;
-  $("#cmp-confirm").hidden = true;
   say("#cmp-msg", "", false);
   $("#cmp-overlay").hidden = false;
 }
@@ -1105,12 +1124,7 @@ function closeCompare() { $("#cmp-overlay").hidden = true; }
 $("#approve").onclick = openCompare;
 $("#cmp-cancel").onclick = closeCompare;
 $("#cmp-cancel2").onclick = closeCompare;
-$("#cmp-approve").onclick = () => {   // step 1 -> reveal the final confirm
-  $("#cmp-approve").hidden = true;
-  $("#cmp-confirm").hidden = false;
-  say("#cmp-msg", "This promotes the challenger and swaps the live skill. Confirm to proceed.", false);
-};
-$("#cmp-confirm").onclick = () => act("#cmp-msg", async () => {
+$("#cmp-approve").onclick = () => act("#cmp-msg", async () => {
   const r = (await j(`/api/promote/${currentPending}`, {method: "POST"})).result;
   closeCompare();
   say("#pending-msg", r, false);

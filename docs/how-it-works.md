@@ -41,4 +41,6 @@
 - **`ui/`**: FastAPI change-control UI (one HTML page, no build step): evidence, risk summary,
   unified and side-by-side diffs, approve or reasoned-reject decisions, revision exploration,
   history, rollback, and searchable skill inventory. It is the only normal application path that
-  activates a pending rewrite.
+  activates a pending rewrite. Clicking a skill opens a read-only explorer for its active revision,
+  pending challenger, and rollback snapshots, including `SKILL.md` and bundled files. Selecting a
+  version in this explorer never changes the served revision.

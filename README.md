@@ -119,6 +119,25 @@ settings live in [Configuration](docs/configuration.md).
 Then walk through the full loop, from mining a stale Tailwind skill through promotion, in the
 [**Tutorial**](docs/tutorial.md).
 
+### Optimize and review in the UI
+
+Click a skill's name or description to open its read-only detail view. The version selector lets
+you explore the active revision, a pending challenger, and rollback snapshots. The file selector
+shows `SKILL.md` plus any bundled resources for the selected version. Browsing does not change the
+revision being served. Each skill row shows the total number of active, pending, and snapshotted
+versions available in that explorer.
+
+Find a skill with an eval set and click **Optimize with SkillOpt**. The UI immediately explains
+that optimization can take a few minutes, disables the button, and opens the live generation log
+directly beneath that skill. The log updates automatically, so progress stays attached to the
+change you started instead of appearing in a page-level activity panel.
+
+![SkillOpt optimization progress shown directly beneath the tailwind skill](docs/ui-home.webp)
+
+When the run finishes, its challenger remains quarantined. Review the risk summary, unified or
+side-by-side diff, held-out task table, model names, and token changes before approving or
+rejecting it. Clicking **Approve & promote** in the comparison panel makes the final decision.
+
 For a hardened open-source Langfuse deployment with agents on other LAN machines, follow
 [Production setup](PRODUCTION_SETUP.md).
 

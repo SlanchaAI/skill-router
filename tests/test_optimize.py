@@ -164,6 +164,30 @@ def test_length_penalty_is_zero_under_target_and_grows_above():
     assert length_penalty("x" * (BODY_TARGET_CHARS * 100)) == LENGTH_PENALTY  # capped, never unbounded
 
 
+def test_reflection_lm_sends_generic_api_key_to_openrouter(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from optimize import rollout as rollout_mod
+
+    captured = {}
+
+    def completion(**kwargs):
+        captured.update(kwargs)
+        message = SimpleNamespace(content="candidate")
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    fake_litellm = SimpleNamespace(completion=completion, success_callback=None)
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(rollout_mod, "teacher_base_url",
+                        lambda: "https://openrouter.ai/api/v1")
+    monkeypatch.setattr(rollout_mod, "api_key", lambda: "sk-or-generic")
+
+    assert rollout_mod.make_reflection_lm()("improve this skill") == "candidate"
+    assert captured["api_key"] == "sk-or-generic"
+    assert captured["api_base"] == "https://openrouter.ai/api/v1"
+    assert captured["model"] == f"openrouter/{rollout_mod.SKILLOPT_MODEL}"
+
+
 def test_failed_dimensions_flags_only_non_pass():
     dims = {"correctness": "pass", "completeness": "missing OCR", "instruction_following": "ok",
             "efficiency": "padded output"}

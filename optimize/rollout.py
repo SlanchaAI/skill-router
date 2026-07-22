@@ -10,7 +10,7 @@ import os
 
 from langchain_openai import ChatOpenAI
 
-from . import agent_model, skillopt_model
+from . import agent_model, api_key, skillopt_model
 
 MODEL = agent_model()
 # The teacher LM (the skill *author*): a stronger model than the serving agent, per the
@@ -119,6 +119,7 @@ def make_reflection_lm():
         messages = prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}]
         if is_openrouter(base):
             response = litellm.completion(model=f"openrouter/{SKILLOPT_MODEL}", messages=messages,
+                                          api_base=base, api_key=api_key(),
                                           extra_body=openrouter_extra_body())
         else:
             kwargs = client_kwargs(base)

@@ -14,9 +14,9 @@ process. Every skill folder is content-addressed, every proposed change is quara
 reads the evidence and approves it, and promotion is atomic, snapshots what it replaced, and is
 recorded. An **MCP server** then serves the approved revision of the right skill for each task,
 which is what lets a cheap or local model reuse methods that would otherwise need a frontier model.
-**SkillOpt integration** closes the loop: Ingot can learn from real agent traces, train skill
-instructions with SkillOpt's reflective optimizer, compare the result on held-out tasks, and put a
-measured proposal in front of a human reviewer.
+**[SkillOpt integration](https://github.com/microsoft/SkillOpt)** closes the loop: Ingot can learn
+from real agent traces, train skill instructions with SkillOpt's reflective optimizer, compare the
+result on held-out tasks, and put a measured proposal in front of a human reviewer.
 
 What the system guarantees:
 
@@ -34,8 +34,9 @@ What the system guarantees:
 Built for individual users first, ready to share:
 
 - **Batteries included.** `docker compose up` starts the router, the change-control UI, and a
-  self-hosted Langfuse for traces and experiments. An included Compose override connects Cloud or
-  another self-hosted Langfuse without starting the bundled stack.
+  self-hosted [Langfuse](https://github.com/langfuse/langfuse) for traces and experiments. An
+  included Compose override connects Cloud or another self-hosted Langfuse without starting the
+  bundled stack.
 - **Local.** Point it at Ollama or vLLM and it runs with no API key; nothing leaves your machine.
 - **Secure.** Hosted calls use OpenRouter with zero-data-retention routing enforced on every
   request, everything binds localhost, and Compose password-gates the shared UI by default.
@@ -73,6 +74,25 @@ settings live in [Configuration](docs/configuration.md).
 
 Then walk through the full loop, from mining a stale Tailwind skill through promotion, in the
 [**Tutorial**](docs/tutorial.md).
+
+### Optimize and review in the UI
+
+Click a skill's name or description to open its read-only detail view. The version selector lets
+you explore the active revision, a pending challenger, and rollback snapshots. The file selector
+shows `SKILL.md` plus any bundled resources for the selected version. Browsing does not change the
+revision being served. Each skill row shows the total number of active, pending, and snapshotted
+versions available in that explorer.
+
+Find a skill with an eval set and click **Optimize with SkillOpt**. The UI immediately explains
+that optimization can take a few minutes, disables the button, and opens the live generation log
+directly beneath that skill. The log updates automatically, so progress stays attached to the
+change you started instead of appearing in a page-level activity panel.
+
+![SkillOpt optimization progress shown directly beneath the tailwind skill](docs/ui-home.webp)
+
+When the run finishes, its challenger remains quarantined. Review the risk summary, unified or
+side-by-side diff, held-out task table, model names, and token changes before approving or
+rejecting it. Clicking **Approve & promote** in the comparison panel makes the final decision.
 
 For a hardened open-source Langfuse deployment with agents on other LAN machines, follow
 [Production setup](PRODUCTION_SETUP.md).

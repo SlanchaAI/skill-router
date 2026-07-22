@@ -1,0 +1,387 @@
+# Ingot demo: a change-control UI over a versioned skill library, an MCP server that serves the
+# approved revision of each skill, a LangGraph deep agent that loads skills from it, optional
+# background candidate generation, and a self-hosted Langfuse (v3) stack for traces / experiments.
+# Langfuse is the default evals backend and comes up with `docker compose up`; trace mining has no
+# local fallback, so it fails loudly unless Langfuse (or a Langfuse-compatible endpoint you point
+# LANGFUSE_* at) is reachable. See docs/mcp-integration.md (Using your own evals platform).
+#
+# SECURITY: the credentials below (postgres/redis/minio/clickhouse passwords, SALT, ENCRYPTION_KEY,
+# NEXTAUTH_SECRET, the LANGFUSE_INIT_ project keys and demo login) are LOCAL-DEMO LITERALS for the
+# self-hosted stack, safe only because nothing here is published beyond 127.0.0.1 and the
+# datastores publish no host port at all. Every secret is overridable via .env (`${VAR:-demo}`); the
+# non-secret LANGFUSE_INIT_ org/project/user *names* stay literal. Before exposing Langfuse beyond
+# your machine you MUST rotate the secrets; see .env.example (Langfuse security) and docs/security.md.
+# Real provider keys (OPENROUTER_API_KEY) live only in .env.
+name: ingot   # fixed project name so image names don't depend on the checkout dir
+services:
+  # Real OIDC provider for the SSO/RBAC integration test (CI only, not a runtime dependency). Boots
+  # Keycloak with the `ingot` realm pre-imported, a client, a test user, and realm roles surfaced
+  # as a `roles` claim (the Entra app-roles shape; add a groups mapper to also cover Okta). Usage:
+  #   docker compose --profile sso up -d keycloak
+  #   docker run --rm --network host -e KEYCLOAK_URL=http://localhost:8081 -v "$PWD:/app" -w /app \
+  #     ingot-mcp python -m pytest tests/test_keycloak_integration.py -q
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm", "--http-port=8081"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./ops/keycloak:/opt/keycloak/data/import:ro
+    profiles: ["sso"]
+
+  mcp:
+    build: .
+    command: python -m mcp_server.server
+    environment:
+      HOST: 0.0.0.0                    # bind the container interface (needed for the port publish);
+                                       # host access stays localhost-only via the 127.0.0.1 mapping
+    ports:
+      - "127.0.0.1:8000:8000"          # MCP streamable-HTTP, localhost only (see README: Network exposure)
+    volumes:
+      - ./skills:/app/skills # promoted skills must reach the running server (hot reload)
+      - ./runs:/app/runs     # usage counts (runs/skill_usage.json) must reach the host runs/ the ui reads
+
+  agent:
+    build: .
+    # entrypoint (not command) so `docker compose run --rm agent "your task"` appends the task
+    entrypoint: ["python", "-m", "agent.run"]
+    env_file:
+      - path: .env           # OPENROUTER_API_KEY (see .env.example)
+        required: false      # a missing .env/key gets a friendly in-app message instead
+    environment:
+      MCP_URL: http://mcp:8000/mcp
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://langfuse-web:3000}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local-demo}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local-demo}
+    volumes:
+      - ./runs:/app/runs   # usage counts + evidence bundles the UI reads must reach the host
+    depends_on:
+      mcp:
+        condition: service_started
+      langfuse-web:
+        condition: service_healthy   # tracing has no local fallback; wait for the evals backend
+
+  # Optional candidate generation + held-out A/B: `docker compose run --rm optimize pdf`.
+  # Writes a quarantined pending record; it can never activate a skill.
+  optimize:
+    build: .
+    entrypoint: ["python", "-m", "optimize.ab"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MCP_URL: http://mcp:8000/mcp
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://langfuse-web:3000}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local-demo}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local-demo}
+    volumes:
+      - ./skills:/app/skills
+      - ./runs:/app/runs
+      - ./optimize/tasks:/app/optimize/tasks   # auto-drafted eval sets must survive the container
+      - /var/run/docker.sock:/var/run/docker.sock  # EXEC_SANDBOX=docker launches locked-down sandbox containers (README: execution-grounded judging)
+    depends_on:
+      mcp:
+        condition: service_started
+      # no langfuse-web dependency: the holdout gate generates its own eval runs (it reads no
+      # traces); Langfuse experiment logging is used opportunistically when the stack is up
+    profiles: ["optimize"]   # only runs on demand, not with `docker compose up`
+
+  # Success/failure mining over real Langfuse traces: `docker compose run --rm optimize-mine pdf`
+  optimize-mine:
+    build: .
+    entrypoint: ["python", "-m", "optimize.mine"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://langfuse-web:3000}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local-demo}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local-demo}
+    volumes:
+      - ./skills:/app/skills
+      - ./runs:/app/runs                       # usage counts + mined-candidate output
+      - ./optimize/tasks:/app/optimize/tasks   # train sets feed the mined-candidate leakage guard
+      - /var/run/docker.sock:/var/run/docker.sock  # EXEC_SANDBOX=docker launches locked-down sandbox containers (README: execution-grounded judging)
+    depends_on:
+      langfuse-web:
+        condition: service_healthy   # mining reads traces from the evals backend; no local fallback
+    profiles: ["optimize"]
+
+  # Cross-model skill compatibility: run a skill's held-out tasks through several serving models
+  # (skill vs no-skill) and report per-model lift: `docker compose run --rm optimize-compat tailwind`
+  # Set COMPAT_MODELS=modelA,modelB,... in .env. Langfuse-free (local rollout + judge).
+  optimize-compat:
+    build: .
+    entrypoint: ["python", "-m", "optimize.compat"]
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./skills:/app/skills
+      - ./runs:/app/runs                       # writes the compatibility matrix to runs/compat/
+      - ./optimize/tasks:/app/optimize/tasks   # held-out task sets (auto-drafted if missing)
+      - /var/run/docker.sock:/var/run/docker.sock  # EXEC_SANDBOX=docker launches locked-down sandbox containers
+    profiles: ["optimize"]
+
+  # Background loop: mine health, propose changes for the failing skills, leave them quarantined
+  # for review: `docker compose run --rm optimize-loop`
+  optimize-loop:
+    build: .
+    entrypoint: ["python", "-m", "optimize.loop"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MCP_URL: http://mcp:8000/mcp
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://langfuse-web:3000}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local-demo}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local-demo}
+    volumes:
+      - ./skills:/app/skills
+      - ./runs:/app/runs
+      - ./optimize/tasks:/app/optimize/tasks   # auto-drafted eval sets must survive the container
+      - /var/run/docker.sock:/var/run/docker.sock  # EXEC_SANDBOX=docker launches locked-down sandbox containers (README: execution-grounded judging)
+    depends_on:
+      mcp:
+        condition: service_started
+      langfuse-web:
+        condition: service_healthy   # the loop mines real traces; no local fallback
+    profiles: ["optimize"]
+
+  # Change-control UI (review evidence, promote, roll back): http://localhost:8080
+  ui:
+    build: .
+    command: python -m uvicorn ui.app:app --host 0.0.0.0 --port 8080
+    ports:
+      - "127.0.0.1:8080:8080"          # localhost only; LAN access goes through the TLS proxy (--profile lan)
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MCP_URL: http://mcp:8000/mcp
+      # Change-control UI login. AUTH_MODE defaults to password (HTTP Basic) with the documented
+      # default credentials admin/ingot, CHANGE AUTH_PASSWORD in .env before exposing the UI beyond
+      # your own machine (--profile lan below). The `:-` defaults mean even an empty var falls back,
+      # so the password is never blank; running the UI open takes an explicit AUTH_MODE=open.
+      # AUTH_MODE=oidc switches to Sign in with Google (set the OIDC_* / SESSION_SECRET vars in
+      # .env, passed through below; see docs/sso.md).
+      AUTH_USER: ${AUTH_USER:-admin}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-ingot}
+      AUTH_MODE: ${AUTH_MODE:-password}
+      OIDC_ISSUER: ${OIDC_ISSUER-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET-}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL-}
+      OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS-}
+      OIDC_ROLE_MAP: ${OIDC_ROLE_MAP-}
+      OIDC_ROLE_CLAIM: ${OIDC_ROLE_CLAIM-}
+      SESSION_SECRET: ${SESSION_SECRET-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://langfuse-web:3000}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local-demo}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local-demo}
+      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3100}   # where the browser reaches Langfuse
+    volumes:
+      - ./skills:/app/skills
+      - ./runs:/app/runs
+      - ./optimize/tasks:/app/optimize/tasks   # auto-drafted eval sets must survive the container
+      - /var/run/docker.sock:/var/run/docker.sock  # EXEC_SANDBOX=docker launches locked-down sandbox containers (README: execution-grounded judging)
+    depends_on:
+      mcp:
+        condition: service_started
+
+  # TLS front door for sharing the change-control UI beyond this machine (docs/security.md
+  # "Network exposure"): docker compose --profile lan up -d proxy
+  # Publishes ONLY the UI, on every interface. Zero-config TLS: Caddy mints certificates on demand
+  # from its own local CA (nothing to register or attach; browsers show a one-time trust warning).
+  # The UI itself stays loopback-bound and password-gated by default; CHANGE AUTH_PASSWORD in .env
+  # before pointing teammates at it.
+  proxy:
+    image: docker.io/caddy:2
+    ports:
+      - "80:80"                        # redirects to https
+      - "443:443"
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data               # persists the local CA so certs stay stable across restarts
+    depends_on:
+      ui:
+        condition: service_started
+    profiles: ["lan"]
+
+  # Separate opt-in TLS endpoint for Langfuse on a trusted LAN. Set LANGFUSE_HOST,
+  # LANGFUSE_BIND_ADDRESS, and LANGFUSE_PUBLIC_URL to this box's trusted name or private IP, then
+  # rotate every demo credential before starting it:
+  #   docker compose --profile langfuse-lan up -d langfuse-proxy
+  # Keeping this separate from `proxy` means sharing the change-control UI never publishes traces.
+  langfuse-proxy:
+    image: docker.io/caddy:2
+    environment:
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-localhost}
+    ports:
+      - "${LANGFUSE_BIND_ADDRESS:-127.0.0.1}:3443:3443"
+    volumes:
+      - ./ops/caddy/Langfuse.Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      langfuse-web:
+        condition: service_healthy
+    profiles: ["langfuse-lan"]
+
+  # ---------------------------------------------------------------------------
+  # Self-hosted Langfuse v3 (adapted from the official docker-compose.yml).
+  # UI: http://localhost:3100, login demo@local.dev / localdemo123
+  # ---------------------------------------------------------------------------
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3.221.1   # pinned for reproducible demos (was :3, a moving major tag)
+    restart: always
+    depends_on: &langfuse-depends-on
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment: &langfuse-env
+      # Every secret here is a ${VAR:-demo} so `.env` can override it without editing this file.
+      # The same var drives the datastore and Langfuse's connection to it (rotate once, both follow).
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres
+      SALT: ${LANGFUSE_SALT:-local-demo-salt}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-miniosecret}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-miniosecret}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REDIS_AUTH:-localredissecret}
+
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3.221.1   # pinned for reproducible demos (was :3, a moving major tag)
+    restart: always
+    depends_on: *langfuse-depends-on
+    ports:
+      - "127.0.0.1:3100:3000"          # host :3100 (host :3000 is often taken)
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3100}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-local-demo-nextauth-secret}
+      # Headless init: creates org/project/user + API keys on first boot (no UI clicks). These are
+      # local-demo literals; override every one via .env before exposing Langfuse (see .env.example).
+      # The project keys reuse LANGFUSE_PUBLIC_KEY / _SECRET_KEY so the agent and mining authenticate
+      # with whatever you set there, and the web login below is a real credential on host :3100.
+      LANGFUSE_INIT_ORG_ID: local
+      LANGFUSE_INIT_ORG_NAME: Local
+      LANGFUSE_INIT_PROJECT_ID: ingot
+      LANGFUSE_INIT_PROJECT_NAME: ingot
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local-demo}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local-demo}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-demo@local.dev}
+      LANGFUSE_INIT_USER_NAME: Demo
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-localdemo123}
+    healthcheck:
+      # the server binds the external interface, not loopback, probe the container's own IP
+      test: ["CMD-SHELL", "wget -qO- http://$$(hostname -i):3000/api/public/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.3
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  minio:
+    image: cgr.dev/chainguard/minio:latest@sha256:8230f06574280781ea6ad45e27962db60175b18e4a43dd54c19012feb5438174   # chainguard only ships :latest (rolling), so pin by digest
+    restart: always
+    entrypoint: sh
+    # create the 'langfuse' bucket before starting the service
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-miniosecret}
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  redis:
+    image: docker.io/redis:7
+    restart: always
+    environment:
+      REDIS_AUTH: ${REDIS_AUTH:-localredissecret}
+    # list form (not a folded string): keeps REDIS_AUTH one argv item even if it contains spaces,
+    # so --requirepass gets exactly the value the healthcheck and Langfuse authenticate with.
+    command: ["--requirepass", "${REDIS_AUTH:-localredissecret}", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      # authenticated ping: an unauthenticated `redis-cli ping` still exits 0 on NOAUTH, so it would
+      # not catch a wrong REDIS_AUTH; -a verifies the password Langfuse actually connects with.
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_AUTH\" --no-auth-warning ping | grep -q PONG"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  postgres:
+    image: docker.io/postgres:17
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  caddy_data:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
+  langfuse_redis_data:

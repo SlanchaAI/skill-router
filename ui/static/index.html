@@ -1,0 +1,1185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>ingot · evidence-gated change control</title>
+<style>
+  /* Slancha identity (seed teaser): paper cream, warm ink,
+     terracotta chrome, display serif + humanist sans + mono data. App-UI register:
+     summary before detail, state as chips/severity, the decision surface up front.
+     champion/challenger keep a green/red status pair, always carried by a ✓/✕/⛔ glyph. */
+  :root {
+    color-scheme: light dark;
+    /* Slancha Operations console system (slancha-tailwind/src/design-system/tokens.css):
+       cool canvas, white surfaces with a soft lift, blue primary, teal for verified/pass,
+       amber warn, red error; Figtree UI + JetBrains Mono data. Variable names are kept from
+       the seed so every state class re-skins in place. --rust is used as text (links, chips,
+       labels) as well as fills/dots, so in light mode it is Slancha's AA-safe blue-text #0F63C9
+       (≥4.5:1 on canvas/white/wash); --rust-2 is the darker hover. */
+    --paper: #F7F8FA; --paper-2: #FFFFFF; --paper-3: #EEF2F7;
+    --ink: #15171C; --ink-2: #667085; --ink-3: #98A2B3;
+    --line: #D9DEE7; --line-2: #C4CDDA;
+    --rust: #0F63C9; --rust-2: #0B4F9E; --rust-bg: #E8F1FD;
+    --pass: #0C6E57; --pass-bg: #E1F7EF;
+    --fail: #BE3B34; --fail-bg: #FFF0EF;
+    --warn: #8A5D00; --warn-bg: #FFF8DF;
+    --serif: "Figtree Variable", Figtree, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --sans: "Figtree Variable", Figtree, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --shadow-sm: 0 1px 2px rgb(16 24 40 / 5%);
+    --shadow: 0 1px 2px rgb(16 24 40 / 4%), 0 14px 40px rgb(35 52 78 / 9%);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0E1420; --paper-2: #161D2B; --paper-3: #1D2534;
+      --ink: #E8EDF4; --ink-2: #9AA6B8; --ink-3: #69748A;
+      --line: #253044; --line-2: #313D52;
+      --rust: #4D9BFF; --rust-2: #7AB4FF; --rust-bg: #16273F;
+      --pass: #46C39F; --pass-bg: #10251F;
+      --fail: #E0796D; --fail-bg: #2D1A17;
+      --warn: #D8B45C; --warn-bg: #2A2210;
+      --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
+      --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 16px 44px rgb(0 0 0 / 42%);
+    }
+  }
+  :root[data-theme="light"] { color-scheme: light;
+    --paper: #F7F8FA; --paper-2: #FFFFFF; --paper-3: #EEF2F7;
+    --ink: #15171C; --ink-2: #667085; --ink-3: #98A2B3;
+    --line: #D9DEE7; --line-2: #C4CDDA;
+    --rust: #0F63C9; --rust-2: #0B4F9E; --rust-bg: #E8F1FD;
+    --pass: #0C6E57; --pass-bg: #E1F7EF; --fail: #BE3B34; --fail-bg: #FFF0EF;
+    --warn: #8A5D00; --warn-bg: #FFF8DF;
+    --shadow-sm: 0 1px 2px rgb(16 24 40 / 5%);
+    --shadow: 0 1px 2px rgb(16 24 40 / 4%), 0 14px 40px rgb(35 52 78 / 9%); }
+  :root[data-theme="dark"] { color-scheme: dark;
+    --paper: #0E1420; --paper-2: #161D2B; --paper-3: #1D2534;
+    --ink: #E8EDF4; --ink-2: #9AA6B8; --ink-3: #69748A;
+    --line: #253044; --line-2: #313D52;
+    --rust: #4D9BFF; --rust-2: #7AB4FF; --rust-bg: #16273F;
+    --pass: #46C39F; --pass-bg: #10251F; --fail: #E0796D; --fail-bg: #2D1A17;
+    --warn: #D8B45C; --warn-bg: #2A2210;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 16px 44px rgb(0 0 0 / 42%); }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  ::selection { background: var(--rust); color: var(--paper); }
+
+  /* ---- top bar ---- */
+  .topbar { position: sticky; top: 0; z-index: 50; display: flex; align-items: center;
+    justify-content: space-between; gap: 1rem; padding: .5rem 1.4rem;
+    background: color-mix(in srgb, var(--paper) 88%, transparent);
+    backdrop-filter: saturate(1.2) blur(8px); border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: baseline; gap: .55rem; text-decoration: none; }
+  .brand .mark { width: 19px; height: 19px; color: var(--rust); align-self: center; }
+  .brand .wm { font-family: var(--serif); font-size: 1.12rem; letter-spacing: -.01em; }
+  .brand .tag { font-family: var(--mono); font-size: .66rem; color: var(--ink-2);
+    letter-spacing: .06em; text-transform: uppercase; }
+  .topnav { display: flex; align-items: center; gap: 1rem; }
+  .topnav .lnk { font-family: var(--mono); font-size: .68rem; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-2); text-decoration: none; transition: color .15s; }
+  .topnav .lnk:hover { color: var(--rust); }
+  .topnav .lnk.ext::after { content: " ↗"; color: var(--ink-3); }
+  @media (max-width: 760px) { .topnav .lnk { display: none; } .topnav .pill { display: inline-block; } }
+  .pill { font-family: var(--mono); font-size: .64rem; letter-spacing: .07em; text-transform: uppercase;
+    font-weight: 700; padding: .18rem .55rem; border-radius: 999px; white-space: nowrap; }
+  .pill.idle { color: var(--ink-2); background: var(--paper-2); }
+  .pill.run { color: var(--warn); background: var(--warn-bg); }
+  .pill.act { color: var(--rust); background: var(--rust-bg); }
+
+  .page { max-width: 74rem; margin: 0 auto; padding: 0 1.4rem 4rem; }
+
+  /* ---- board head ---- */
+  .board-head { padding: 2rem 0 .3rem; }
+  .board-head .eyebrow { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; }
+  .board-head .eyebrow .n { color: var(--rust); }
+  .board-head .eyebrow .side { color: var(--ink-3); }
+  .board-title { font-family: var(--serif); font-weight: 700; letter-spacing: -.02em;
+    font-size: clamp(1.9rem, 4vw, 2.7rem); margin: .5rem 0 0; text-wrap: balance; }
+  .board-sub { color: var(--ink-2); font-size: .96rem; margin: .6rem 0 0; max-width: 48rem; text-wrap: pretty; }
+  .board-sub a { color: var(--rust); text-decoration: none; white-space: nowrap; }
+  .board-sub a:hover { text-decoration: underline; }
+
+  /* ---- KPI strip ---- */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    margin-top: 1.6rem; border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background: var(--paper-2); box-shadow: var(--shadow-sm); }
+  .kpi { padding: .95rem 1.05rem 1.05rem; border-left: 1px solid var(--line); border-top: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: .12rem; }
+  .kpi:first-child { border-left: 0; }
+  .kpi .l { font-family: var(--mono); font-size: .64rem; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--ink-3); }
+  .kpi .n { font-family: var(--mono); font-weight: 600; font-size: 1.85rem; line-height: 1.05;
+    font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .kpi .d { font-family: var(--mono); font-size: .66rem; color: var(--ink-2); margin-top: .1rem; }
+  .kpi.act .n { color: var(--rust); }
+  .kpi.act { background: var(--rust-bg); }
+  @media (min-width: 1090px) { .kpi { border-top: 0; } }
+
+  /* ---- attention band ---- */
+  .attention { margin-top: 1rem; display: flex; flex-direction: column; }
+  .alert { display: flex; align-items: baseline; gap: .7rem; padding: .55rem .2rem;
+    border-bottom: 1px solid var(--line); }
+  .alert:last-child { border-bottom: 0; }
+  .alert::before { content: ""; width: 8px; height: 8px; border-radius: 50%; flex: none;
+    align-self: center; background: var(--ink-3); }
+  .alert.act::before { background: var(--rust); }
+  .alert.warn::before { background: var(--warn); }
+  .alert.ok::before { background: var(--pass); }
+  .alert.info::before { background: var(--ink-3); }
+  .alert .atag { font-family: var(--mono); font-size: .74rem; font-weight: 700; letter-spacing: .02em;
+    white-space: nowrap; }
+  .alert.act .atag { color: var(--rust); } .alert.warn .atag { color: var(--warn); }
+  .alert.ok .atag { color: var(--pass); }
+  .alert .atxt { font-size: .84rem; color: var(--ink-2); }
+
+  /* ---- section scaffold ---- */
+  .band { padding-top: 2.6rem; }
+  .band-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+    border-top: 1px solid var(--ink); padding-top: .55rem;
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; }
+  .band-head .n { color: var(--rust); }
+  .band-head .side { color: var(--ink-3); }
+  h2.head { font-family: var(--serif); font-weight: 700; letter-spacing: -.015em; line-height: 1.05;
+    font-size: clamp(1.5rem, 3.5vw, 2.1rem); margin: .8rem 0 0; text-wrap: balance; }
+  .sub { font-size: .9rem; color: var(--ink-2); margin: .5rem 0 0; max-width: 48rem; text-wrap: pretty; }
+
+  .chip { font-family: var(--mono); font-size: .66rem; letter-spacing: .05em; padding: .12rem .5rem;
+    border-radius: 6px; white-space: nowrap; text-transform: uppercase; font-weight: 600; }
+  .chip.pass { color: var(--pass); background: var(--pass-bg); }
+  .chip.fail { color: var(--fail); background: var(--fail-bg); }
+  .chip.rust { color: var(--rust); background: var(--rust-bg); }
+  .chip.warn { color: var(--warn); background: var(--warn-bg); }
+  .chip.mute { color: var(--ink-2); background: var(--paper-2); border: 1px dashed var(--line-2); }
+
+  /* ---- buttons ---- */
+  .btn { cursor: pointer; font: 600 .7rem/1 var(--mono); letter-spacing: .05em; text-transform: uppercase;
+    padding: .48rem .9rem; border-radius: 9px; border: 1px solid var(--line-2); background: transparent;
+    color: var(--ink-2); transition: background .15s, color .15s, border-color .15s; white-space: nowrap; }
+  .btn:hover:not(:disabled) { border-color: var(--rust); color: var(--rust); }
+  .btn.primary { border-color: var(--rust); background: var(--rust); color: var(--paper); }
+  .btn.primary:hover:not(:disabled) { background: var(--rust-2); border-color: var(--rust-2); color: var(--paper); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.danger { border-color: var(--fail); background: var(--fail); color: var(--paper); }
+  .btn.danger:hover:not(:disabled) { filter: brightness(.92); }
+
+  /* Promotion comparison modal */
+  .cmp-overlay { position: fixed; inset: 0; background: rgba(15,20,32,.6); z-index: 50;
+    display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+  .cmp-overlay[hidden] { display: none; }
+  .cmp-modal { background: var(--paper-2); border: 1px solid var(--line); border-radius: 16px;
+    width: min(640px, 96vw); max-height: 90vh; overflow: auto; padding: 1.3rem 1.5rem 1.2rem;
+    box-shadow: var(--shadow); }
+  .cmp-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    font: 600 .95rem/1.3 var(--sans); color: var(--ink); margin-bottom: 1rem; }
+  .cmp-head b { font-family: var(--mono); color: var(--rust); }
+  .cmp-x { border: 0; background: none; font-size: 1.4rem; line-height: 1; color: var(--ink-2);
+    cursor: pointer; padding: 0 .2rem; }
+  .cmp-sec { margin-bottom: 1.1rem; }
+  .cmp-sec h4 { font: 600 .68rem/1 var(--mono); letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-2); margin: 0 0 .5rem; }
+  .cmp-kv { display: flex; justify-content: space-between; gap: 1rem; font-size: .82rem;
+    padding: .25rem 0; border-bottom: 1px dotted var(--line); }
+  .cmp-kv code { font-family: var(--mono); color: var(--ink); }
+  .cmp-tbl { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .cmp-tbl th, .cmp-tbl td { text-align: right; padding: .32rem .5rem; border-bottom: 1px solid var(--line); }
+  .cmp-tbl th:first-child, .cmp-tbl td:first-child { text-align: left; color: var(--ink-2); }
+  .cmp-tbl th { font: 600 .66rem/1 var(--mono); text-transform: uppercase; letter-spacing: .05em;
+    color: var(--ink-2); }
+  .cmp-tbl .win { color: var(--pass); font-weight: 700; }
+  .cmp-tbl .lose { color: var(--fail); font-weight: 700; }
+  .cmp-actions { display: flex; align-items: center; gap: .7rem; margin-top: 1.1rem; flex-wrap: wrap; }
+
+  /* Read-only skill and revision explorer */
+  .skill-modal { width: min(900px, 96vw); }
+  .version-toolbar { display: grid; grid-template-columns: minmax(14rem, 1fr) minmax(12rem, 1fr);
+    gap: .8rem; margin-bottom: 1rem; }
+  .version-field { display: flex; flex-direction: column; gap: .35rem; }
+  .version-field label { font: 600 .66rem/1 var(--mono); letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink-2); }
+  .version-field select { width: 100%; font: .75rem/1.4 var(--mono); padding: .48rem .55rem;
+    border-radius: 8px; border: 1px solid var(--line-2); background: var(--paper); color: var(--ink); }
+  .version-meta { display: flex; flex-wrap: wrap; gap: .45rem; margin: 0 0 .7rem; }
+  .version-desc { color: var(--ink-2); font-size: .84rem; margin: 0 0 .8rem; text-wrap: pretty; }
+  .version-pre { font-family: var(--mono); font-size: .74rem; line-height: 1.55; margin: 0;
+    background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: .85rem 1rem;
+    overflow: auto; min-height: 16rem; max-height: 56vh; white-space: pre; color: var(--ink); }
+  @media (max-width: 620px) { .version-toolbar { grid-template-columns: 1fr; } }
+
+  /* ---- skills list ---- */
+  .skill-controls { display: flex; align-items: end; gap: .75rem; flex-wrap: wrap; margin-top: 1rem; }
+  .skill-controls .version-field { min-width: min(18rem, 100%); flex: 1 1 18rem; }
+  .skill-controls .filter-field { flex: 0 1 13rem; min-width: 10rem; }
+  .skill-controls input, .skill-controls select, .reject-reason { width: 100%; font: .78rem/1.4 var(--mono);
+    padding: .52rem .62rem; border-radius: 8px; border: 1px solid var(--line-2);
+    background: var(--paper-2); color: var(--ink); }
+  .filter-count { font: .68rem/1.4 var(--mono); color: var(--ink-3); align-self: center; }
+  .skilllist { margin-top: 1.1rem; border-top: 1px solid var(--line); }
+  .srow { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1rem;
+    padding: .9rem .45rem; border-bottom: 1px solid var(--line); transition: background .15s ease-out; }
+  .srow.pend { background: var(--rust-bg); }
+  .srow:hover { background: var(--paper-2); }
+  .srow.pend:hover { background: var(--rust-bg); }
+  .srow .main { flex: 1 1 26rem; min-width: 0; }
+  .skill-open { all: unset; display: block; width: 100%; cursor: pointer; border-radius: 8px; }
+  .skill-open:hover .sname { color: var(--rust); }
+  .srow .nameline { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+  .srow .sname { font-family: var(--mono); font-size: .86rem; font-weight: 600; color: var(--ink); }
+  .srow .sdesc { font-size: .82rem; color: var(--ink-2); margin: .28rem 0 0; text-wrap: pretty;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .srow .sactions { flex: 0 0 auto; display: flex; gap: .5rem; align-items: center; margin-left: auto; }
+  .srow.noev .sname { color: var(--ink-2); font-weight: 500; }
+  .srow.noev .sdesc { -webkit-line-clamp: 1; }
+  .empty { margin-top: 1.1rem; padding: 1.4rem 1.3rem; border: 1px dashed var(--line-2); border-radius: 14px;
+    background: var(--paper-2); }
+  .empty .et { font-family: var(--serif); font-size: 1.05rem; color: var(--ink); }
+  .empty .ed { font-family: var(--mono); font-size: .76rem; color: var(--ink-2); margin-top: .45rem; line-height: 1.7; }
+  .empty code { font-family: var(--mono); background: var(--paper-3); color: var(--ink);
+    padding: .05rem .35rem; border-radius: 4px; }
+
+  /* ---- history: rollback targets + audit trail ---- */
+  .hlist { margin-top: 1.1rem; border-top: 1px solid var(--line); }
+  .hrow { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem;
+    padding: .7rem .45rem; border-bottom: 1px solid var(--line); }
+  .hrow .hname { font-family: var(--mono); font-size: .84rem; font-weight: 600; }
+  .hrow .hmeta { font-family: var(--mono); font-size: .72rem; color: var(--ink-3); }
+  .hrow .hact { margin-left: auto; display: flex; gap: .5rem; align-items: center; }
+  .hrow select { font: .72rem/1.4 var(--mono); padding: .34rem .4rem; border-radius: 8px;
+    border: 1px solid var(--line-2); background: var(--paper); color: var(--ink); max-width: 15rem; }
+  .audit { font-family: var(--mono); font-size: .74rem; color: var(--ink-2); line-height: 1.85;
+    margin-top: 1.1rem; }
+  .audit .aact { font-weight: 700; color: var(--rust); text-transform: uppercase; }
+  .audit .aact.reject { color: var(--fail); }   /* a discarded challenger reads distinct from a promotion */
+
+  /* SkillOpt run log, nested under the skill being optimized */
+  .skill-run { flex: 1 0 100%; min-width: 0; margin-top: .25rem; }
+  .skill-run-head { display: flex; justify-content: space-between; gap: .75rem; margin-bottom: .35rem;
+    font: 600 .66rem/1.4 var(--mono); color: var(--rust); text-transform: uppercase;
+    letter-spacing: .06em; }
+  .skill-run-head .count { color: var(--ink-3); font-weight: 400; }
+  .skill-run-note { margin: 0 0 .45rem; font: .72rem/1.5 var(--mono); color: var(--ink-2); }
+  .skill-run-log { font-family: var(--mono); font-size: .74rem; line-height: 1.6; margin: 0;
+    background: var(--paper-2); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-sm);
+    padding: .85rem 1rem; overflow: auto; max-height: 18rem; white-space: pre-wrap; color: var(--ink-2); }
+  .skill-run.error .skill-run-head { color: var(--fail); }
+
+  /* ---- review: champion vs challenger ---- */
+  .duel { display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: stretch; margin-top: 1.3rem; }
+  .cand { border: 1px solid var(--line); border-radius: 14px; padding: 1.05rem 1.15rem; background: var(--paper-2); box-shadow: var(--shadow-sm);
+    display: flex; flex-direction: column; gap: .3rem; }
+  .cand .role { font-family: var(--mono); font-size: .64rem; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--ink-3); }
+  .cand .score { font-family: var(--mono); font-weight: 600; font-size: 2.1rem; line-height: 1;
+    font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .cand .foot { font-family: var(--mono); font-size: .66rem; color: var(--ink-3); }
+  .cand.win { background: var(--pass-bg); border-color: var(--pass); }
+  .cand.win .score { color: var(--pass); }
+  .cand.win .role::after { content: " ✓"; font-weight: 700; }
+  .cand.lose { opacity: .72; }
+  .versus { align-self: center; font-family: var(--serif); font-style: italic; color: var(--ink-3);
+    font-size: 1.05rem; }
+  @media (max-width: 620px) {
+    .duel { grid-template-columns: 1fr; }
+    .versus { padding: .1rem 0; }
+  }
+  .metaline { font-family: var(--mono); font-size: .74rem; color: var(--ink-3); margin-top: .9rem; line-height: 1.75;
+    font-variant-numeric: tabular-nums; }
+  .metaline b { color: var(--ink-2); }
+  .metaline a { color: var(--rust); text-decoration: none; } .metaline a:hover { text-decoration: underline; }
+  .tokline { font-family: var(--mono); font-size: .78rem; color: var(--ink-2); margin-top: .5rem;
+    font-variant-numeric: tabular-nums; }
+  .tokline b { color: var(--ink); } .tokline .reg { color: var(--fail); font-weight: 600; }
+  .changed { margin-top: .85rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; }
+  .changed .cl { font-family: var(--mono); font-size: .66rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-3); }
+  .gate { font-family: var(--mono); font-size: .78rem; padding: .55rem .8rem; border-radius: 10px; margin-top: 1rem;
+    text-wrap: pretty; line-height: 1.6; }
+  .gate.ok { color: var(--pass); background: var(--pass-bg); }
+  .gate.block { color: var(--fail); background: var(--fail-bg); font-weight: 600; }
+  .gate.warn { color: var(--warn); background: var(--warn-bg); }
+  .metaline b.win { color: var(--pass); } .metaline b.lose { color: var(--fail); }
+  .review-actions { display: flex; align-items: center; gap: .7rem; margin-top: 1.2rem; flex-wrap: wrap; }
+  .review-actions .msg { font-family: var(--mono); font-size: .74rem; color: var(--pass); }
+  .review-actions .msg.err { color: var(--fail); font-weight: 600; }
+  .risk-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+    gap: .55rem; margin-top: 1rem; padding: .8rem; border: 1px solid var(--line);
+    border-radius: 12px; background: var(--paper); }
+  .risk-summary.high { border-color: var(--warn); background: var(--warn-bg); }
+  .risk-stat { display: flex; flex-direction: column; gap: .08rem; }
+  .risk-stat b { font: 600 1rem/1.2 var(--mono); color: var(--ink); }
+  .risk-stat span { font: .64rem/1.3 var(--mono); letter-spacing: .05em; text-transform: uppercase;
+    color: var(--ink-3); }
+  .risk-warning { grid-column: 1 / -1; font: 600 .74rem/1.5 var(--mono); color: var(--warn); }
+  .difflabel { font-family: var(--mono); font-size: .66rem; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--rust); margin: 1.4rem 0 .4rem; }
+  pre.diff { font-family: var(--mono); font-size: .72rem; line-height: 1.55; margin: 0;
+    background: var(--paper-2); border: 1px solid var(--line); border-radius: 14px; padding: .8rem .95rem;
+    overflow: auto; max-height: 28rem; white-space: pre; color: var(--ink-2); }
+  pre.diff .add { color: var(--pass); } pre.diff .del { color: var(--fail); }
+  pre.diff .hunk { color: var(--rust); } pre.diff .meta { color: var(--ink-3); }
+  .side-diff { margin-top: .75rem; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--paper-2); overflow: hidden; }
+  .side-diff summary { cursor: pointer; padding: .65rem .8rem; font: 600 .7rem/1.3 var(--mono);
+    color: var(--rust); letter-spacing: .05em; text-transform: uppercase; }
+  .side-component { border-top: 1px solid var(--line); }
+  .side-component h4 { margin: 0; padding: .5rem .75rem; font: 600 .7rem/1.3 var(--mono);
+    color: var(--ink-2); background: var(--paper-3); }
+  .side-columns { display: grid; grid-template-columns: 1fr 1fr; }
+  .side-column + .side-column { border-left: 1px solid var(--line); }
+  .side-column .side-label { display: block; padding: .35rem .65rem; font: 600 .64rem/1.3 var(--mono);
+    color: var(--ink-3); text-transform: uppercase; border-bottom: 1px solid var(--line); }
+  .side-column pre { margin: 0; padding: .7rem; max-height: 24rem; overflow: auto;
+    font: .7rem/1.5 var(--mono); white-space: pre; color: var(--ink-2); }
+  .reject-help { color: var(--ink-2); font-size: .82rem; margin: 0 0 .8rem; }
+  .reject-reason { min-height: 6rem; resize: vertical; }
+  @media (max-width: 720px) { .side-columns { grid-template-columns: 1fr; }
+    .side-column + .side-column { border-left: 0; border-top: 1px solid var(--line); } }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+  .footer { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-top: 3rem;
+    padding-top: .6rem; border-top: 1px solid var(--ink); font-family: var(--mono); font-size: .68rem;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); flex-wrap: wrap; }
+  .footer .k { color: var(--rust); }
+  .footer a { color: var(--ink-3); text-decoration: none; } .footer a:hover { color: var(--rust); }
+
+  .js .reveal { opacity: 0; transform: translateY(12px); }
+  .js .reveal.in { opacity: 1; transform: none; transition: opacity .6s ease-out, transform .6s cubic-bezier(.16,1,.3,1); }
+
+  /* staggered entrance for alert lines + skill rows, first paint only (structure: Magic UI animated-list) */
+  .js .list-in { animation: list-in .5s cubic-bezier(.16,1,.3,1) both; animation-delay: calc(var(--i, 0) * 70ms); }
+  @keyframes list-in { from { opacity: 0; transform: translateY(9px) scale(.985); } to { opacity: 1; transform: none; } }
+
+  /* review card: the decision surface. While a challenger waits, a slow terracotta beam
+     circles the border (structure: Magic UI border-beam, gradient square on an offset-path
+     rect, masked to the 1px ring). Falls back to the plain border where unsupported. */
+  .review-card { position: relative; border: 1px solid var(--line); border-radius: 16px;
+    padding: 1.15rem 1.25rem 1.25rem; margin-top: 1.1rem; background: var(--paper-2);
+    box-shadow: var(--shadow); }
+  .beam { display: none; pointer-events: none; position: absolute; inset: 0; border-radius: inherit;
+    border: 1px solid transparent;
+    mask-image: linear-gradient(transparent, transparent), linear-gradient(#000, #000);
+    mask-clip: padding-box, border-box; mask-composite: intersect; }
+  .beam::before { content: ""; position: absolute; aspect-ratio: 1; width: 90px;
+    background: linear-gradient(to left, var(--rust), var(--rust-2), transparent);
+    offset-path: rect(0 auto auto 0 round 90px); animation: beam 9s linear infinite; }
+  @keyframes beam { to { offset-distance: 100%; } }
+  @supports ((offset-path: rect(0 auto auto 0)) and (mask-composite: intersect)) {
+    .beam { display: block; }
+  }
+
+  button:focus-visible, .btn:focus-visible, input:focus-visible, select:focus-visible,
+  textarea:focus-visible, summary:focus-visible,
+  .skill-open:focus-visible, a:focus-visible {
+    outline: 2px solid var(--rust); outline-offset: 2px; border-radius: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; } * { transition: none !important; animation: none !important; }
+    .js .reveal { opacity: 1; transform: none; }
+    .beam { display: none !important; }
+  }
+</style>
+</head>
+<body>
+<script>document.documentElement.classList.add("js");</script>
+
+<nav class="topbar">
+  <a class="brand" href="/">
+    <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+         stroke-linecap="round" aria-hidden="true">
+      <circle cx="5" cy="5" r="2.3"/><circle cx="5" cy="19" r="2.3"/><circle cx="19" cy="12" r="2.3"/>
+      <path d="M7.2 6.1 C 12 8.4, 12.8 10.4, 16.8 11.4"/>
+      <path d="M7.2 17.9 C 12 15.6, 12.8 13.6, 16.8 12.6"/>
+    </svg>
+    <span class="wm">ingot</span><span class="tag">change control</span>
+  </a>
+  <div class="topnav">
+    <a class="lnk" href="#review-section">Review</a>
+    <a class="lnk" href="#history-section">History</a>
+    <a class="lnk" href="#skills">Skills</a>
+    <a class="lnk ext" id="lf" href="#" target="_blank" rel="noopener">Langfuse</a>
+    <span class="pill idle" id="status-pill">…</span>
+    <span class="who" id="who" hidden><span id="who-email"></span>
+      <a class="lnk" id="logout-link" href="/auth/logout" hidden>Log out</a></span>
+  </div>
+</nav>
+<script>
+  // Password and OIDC modes surface the current reviewer. Open mode has no signed-in identity.
+  fetch("/auth/me").then(r => r.ok ? r.json() : null).then(u => {
+    if (!u || !u.authenticated) return;
+    document.getElementById("who-email").textContent =
+      (u.email || u.name || "signed in") + (u.role ? " (" + u.role + ")" : "");
+    document.getElementById("logout-link").hidden = !u.email;
+    document.getElementById("who").hidden = false;
+  }).catch(() => {});
+</script>
+
+<div class="page">
+  <div class="sr-only" id="board-announcer" aria-live="polite" aria-atomic="true"></div>
+  <header class="board-head reveal">
+    <div class="eyebrow"><span><span class="n">/</span> CHANGE CONTROL</span>
+      <span class="side" id="head-side">ingot</span></div>
+    <h1 class="board-title">Evidence-gated change control</h1>
+    <p class="board-sub">Every change to a skill's instructions is quarantined until you approve it here.
+      Approval re-checks the evidence against the on-disk revision, snapshots what it replaces, and swaps
+      the skill directory atomically. Any snapshot can be restored from History.
+      Deep traces in <a id="lf2" href="#" target="_blank" rel="noopener">Langfuse ↗</a>.</p>
+    <div class="kpis" id="kpis"><div class="kpi"><span class="n">…</span><span class="l">loading</span></div></div>
+    <div class="attention" id="attention"></div>
+  </header>
+
+  <section class="band reveal" id="review-section">
+    <div class="band-head"><span><span class="n">/</span> REVIEW</span>
+      <span class="side">evidence and decision</span></div>
+    <h2 class="head" id="pending-heading" tabindex="-1">Pending change</h2>
+    <p class="sub" id="pending-copy">Inspect every changed instruction before approval.</p>
+    <div class="review-card" id="pending-card" hidden>
+      <div class="beam" aria-hidden="true"></div>
+      <div id="pending-detail"></div>
+      <div class="risk-summary" id="risk-summary" aria-label="Change risk summary"></div>
+      <div class="difflabel">SKILL.md diff · champion → challenger</div>
+      <pre class="diff" id="diff"></pre>
+      <details class="side-diff" id="side-diff">
+        <summary>Compare before and after side by side</summary>
+        <div id="side-diff-body"></div>
+      </details>
+      <div class="difflabel" id="evidence-label">Evidence bundle · recorded at generation time</div>
+      <pre class="diff" id="evidence"></pre>
+      <div class="review-actions">
+        <button class="btn primary" id="approve">Approve</button>
+        <button class="btn" id="reject">Reject</button>
+      </div>
+    </div>
+    <div class="empty" id="review-empty">
+      <div class="et">Nothing is awaiting review.</div>
+      <div class="ed">SkillOpt proposals land here with measured evidence. No optimizer or other
+        application path can activate a skill without human approval.</div>
+    </div>
+    <!-- outside the card on purpose: approving or rejecting the last pending change hides the
+         card, and the result of that decision has to stay on screen -->
+    <div class="review-actions"><span class="msg" id="pending-msg"></span></div>
+  </section>
+
+  <div class="cmp-overlay" id="cmp-overlay" hidden>
+    <div class="cmp-modal" role="dialog" aria-modal="true" aria-labelledby="cmp-title">
+      <div class="cmp-head"><span id="cmp-title">Confirm promotion, <b id="cmp-skill"></b></span>
+        <button class="cmp-x" id="cmp-cancel" aria-label="Close">×</button></div>
+      <div class="cmp-body" id="cmp-body"></div>
+      <div class="cmp-actions">
+        <button class="btn" id="cmp-cancel2">Cancel</button>
+        <button class="btn primary" id="cmp-approve">Approve &amp; promote</button>
+      </div>
+      <span class="msg" id="cmp-msg"></span>
+    </div>
+  </div>
+
+  <div class="cmp-overlay" id="skill-overlay" hidden>
+    <div class="cmp-modal skill-modal" role="dialog" aria-modal="true" aria-labelledby="skill-title">
+      <div class="cmp-head"><span id="skill-title">Skill, <b id="skill-detail-name"></b></span>
+        <button class="cmp-x" id="skill-close" aria-label="Close">×</button></div>
+      <div class="version-toolbar">
+        <div class="version-field"><label for="skill-version">Version</label>
+          <select id="skill-version"></select></div>
+        <div class="version-field"><label for="skill-file">File</label>
+          <select id="skill-file"></select></div>
+      </div>
+      <div class="version-meta" id="skill-version-meta"></div>
+      <p class="version-desc" id="skill-version-desc"></p>
+      <pre class="version-pre" id="skill-version-content"></pre>
+      <div class="review-actions"><span class="msg" id="skill-version-msg"></span></div>
+    </div>
+  </div>
+
+  <div class="cmp-overlay" id="reject-overlay" hidden>
+    <div class="cmp-modal" role="dialog" aria-modal="true" aria-labelledby="reject-title">
+      <div class="cmp-head"><span id="reject-title">Reject change, <b id="reject-skill"></b></span>
+        <button class="cmp-x" id="reject-close" aria-label="Close">×</button></div>
+      <p class="reject-help">This permanently removes the quarantined challenger. Add an optional
+        reason to the audit trail so future reviewers know why it was rejected.</p>
+      <div class="version-field"><label for="reject-reason">Optional reason</label>
+        <textarea class="reject-reason" id="reject-reason" maxlength="500"
+          placeholder="For example: removes required safety checks"></textarea></div>
+      <div class="cmp-actions">
+        <button class="btn" id="reject-cancel">Cancel</button>
+        <button class="btn danger" id="reject-confirm">Confirm rejection</button>
+      </div>
+      <span class="msg" id="reject-msg"></span>
+    </div>
+  </div>
+
+  <section class="band reveal" id="history-section">
+    <div class="band-head"><span><span class="n">/</span> HISTORY</span>
+      <span class="side">snapshots and audit trail</span></div>
+    <h2 class="head">Revisions and audit trail</h2>
+    <p class="sub">Every promotion snapshots the revision it displaced, so a change is reversible.
+      Restoring one is atomic and is itself recorded. The trail holds metadata only (action, skill,
+      revision, actor, timestamp, and an optional rejection reason), never skill text.</p>
+    <div id="history"></div>
+    <div class="review-actions"><span class="msg" id="history-msg"></span></div>
+  </section>
+
+  <section class="band reveal" id="skills">
+    <div class="band-head"><span><span class="n">/</span> SKILLS</span>
+      <span class="side" id="skills-side"></span></div>
+    <h2 class="head">Skills under control</h2>
+    <p class="sub">Every skill the router serves, with the revision it is serving. SkillOpt trains
+      bounded instruction edits, measures them on train and held-out tasks, and leaves each result
+      quarantined for review. Skills without an eval task set can't be measured yet: a CLI run
+      auto-drafts one.</p>
+    <div class="skill-controls">
+      <div class="version-field"><label for="skill-search">Search skills</label>
+        <input id="skill-search" type="search" placeholder="Name or description"></div>
+      <div class="version-field filter-field"><label for="skill-filter">Filter</label>
+        <select id="skill-filter">
+          <option value="all">All skills</option>
+          <option value="pending">Awaiting review</option>
+          <option value="evals">Has evals</option>
+          <option value="no-evals">Needs evals</option>
+        </select></div>
+      <span class="filter-count" id="skill-filter-count"></span>
+    </div>
+    <div class="skilllist" id="skills-list"></div>
+    <div class="review-actions"><span class="msg" id="skills-msg"></span></div>
+  </section>
+
+  <div class="footer">
+    <span><span class="k">ingot</span> · evidence-gated change control · atomic promotion, revisioned rollback</span>
+    <span>hot-reload on approve</span>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let langfuseUrl = "#", currentPending = null, currentPendingData = null;
+let booted = false;  // entrance animations run on first paint only; 3s refreshes stay still
+let boardSignature = null, skillInventory = [], runInventory = {}, revisionInventory = {};
+let revisionInventoryReady = false;
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// count-up on KPI values (structure: Magic UI number-ticker, vanilla rAF instead of a spring)
+const kpiPrev = {};
+function tickKpis() {
+  document.querySelectorAll("#kpis .kpi").forEach(el => {
+    const n = el.querySelector(".n"), key = el.querySelector(".l").textContent;
+    const target = Number(n.textContent);
+    if (!Number.isFinite(target)) return;
+    const from = key in kpiPrev ? kpiPrev[key] : 0;
+    kpiPrev[key] = target;
+    if (REDUCED || from === target) return;
+    const t0 = performance.now(), dur = 700;
+    requestAnimationFrame(function step(t) {
+      const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+      n.textContent = Math.round(from + (target - from) * e);
+      if (p < 1) requestAnimationFrame(step);
+    });
+  });
+}
+
+const staggerIn = sel => document.querySelectorAll(sel).forEach((el, i) => {
+  el.classList.add("list-in"); el.style.setProperty("--i", Math.min(i, 12));  // long lists land together past the fold
+});
+// skill descriptions come from third-party skill packs, escape before innerHTML
+const esc = t => { const d = document.createElement("div"); d.textContent = t; return d.innerHTML; };
+
+// Surface the API's own explanation (FastAPI puts it in `detail`) rather than a raw response body:
+// a refused promotion, a stale-evidence 409, or an unknown revision has to be readable in the UI.
+async function j(url, opts) {
+  const r = await fetch(url, opts);
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (_) { /* not JSON: fall back to the text */ }
+  if (!r.ok) throw new Error((data && data.detail) || text || `request failed (${r.status})`);
+  return data;
+}
+
+// `source` separates "this poll could not load" from "your click did this": a recovered poll
+// clears its own banner and leaves the result of the last action on screen.
+function say(sel, text, isError, source) {
+  const el = $(sel);
+  el.textContent = text;
+  el.classList.toggle("err", Boolean(isError));
+  el.dataset.source = text ? (source || "action") : "";
+}
+function clearLoadError(sel) {
+  if ($(sel).dataset.source === "load") say(sel, "", false);
+}
+
+// Every state-changing click reports its own failure. Without this an approval refused by the
+// evidence gate looked identical to one that worked: the button did nothing and said nothing.
+async function act(sel, run) {
+  try {
+    say(sel, await run(), false);
+  } catch (e) {
+    say(sel, `⛔ ${e.message}`, true);
+  }
+  refresh();
+}
+
+const kpi = (cls, n, l, d) =>
+  `<div class="kpi ${cls}"><span class="n">${n}</span><span class="l">${l}</span>${d ? `<span class="d">${d}</span>` : ""}</div>`;
+const alert = (cls, tag, txt) =>
+  `<div class="alert ${cls}"><span class="atag">${tag}</span><span class="atxt">${txt}</span></div>`;
+// String(): the audit trail is a plain JSONL file an operator can edit, so a non-string
+// revision must shorten to nonsense rather than throw and blank the history section
+const shortRev = r => String(r || "").slice(0, 12);
+const statusChip = s => s.pending ? `<span class="chip rust">change awaiting review</span>`
+  : s.status === "running" ? `<span class="chip warn">SkillOpt running</span>`
+  : !s.has_tasks ? `<span class="chip mute">no evals</span>`
+  : `<span class="chip pass">evals</span>`;
+
+// History is a separate endpoint, and it can fail on its own. The two numbers it feeds report
+// that instead of reading as zero, and the rest of the board still renders from the skills
+// payload: a failed history poll used to leave the KPI strip on its "…" placeholder forever.
+function historyKpis(history) {
+  if (!history) {
+    return kpi("", "–", "rollback points", "history unavailable") +
+           kpi("", "–", "recorded decisions", "history unavailable");
+  }
+  const snapshots = Object.values(history.revisions).reduce((n, r) => n + r.length, 0);
+  // the trail below is a capped page; the KPI reports the real total so the two never disagree
+  const shown = history.audit.records.length, decisions = history.audit.total;
+  return kpi("", snapshots, "rollback points", "revision snapshots") +
+    kpi("", decisions, "recorded decisions",
+        decisions > shown ? `approve + rollback · newest ${shown} listed` : "approve + rollback");
+}
+
+function renderBoard(skills, withTasks, history) {
+  const pending = skills.filter(s => s.pending).length;
+  const running = skills.filter(s => s.status === "running").length;
+  $("#kpis").innerHTML =
+    kpi(pending ? "act" : "", pending, "awaiting review",
+        pending ? "human decision required" : "none quarantined") +
+    kpi("", skills.length, "skills tracked", `${withTasks.length} with evals`) +
+    historyKpis(history);
+  tickKpis();
+  $("#skills-side").textContent = `${withTasks.length} of ${skills.length}`;
+  $("#head-side").textContent = pending ? `${pending} to review` : "ingot";
+
+  const alerts = [];
+  if (pending) alerts.push(alert("act", "REVIEW",
+    `${pending} change${pending > 1 ? "s" : ""} quarantined and awaiting your decision.`));
+  if (running) alerts.push(alert("info", "OPTIMIZING",
+    "a SkillOpt run is in progress; follow it under the skill."));
+  if (!pending && !running) alerts.push(alert("ok", "CLEAR",
+    "nothing quarantined; every skill is serving its approved revision."));
+  if (!withTasks.length) alerts.push(alert("info", "NO EVALS",
+    `${skills.length} skill${skills.length === 1 ? "" : "s"} tracked, none with an eval task set, which SkillOpt optimization needs.`));
+  $("#attention").innerHTML = alerts.join("");
+
+  const pill = $("#status-pill");
+  if (pending) { pill.className = "pill act"; pill.textContent = `${pending} to review`; }
+  else if (running) { pill.className = "pill run"; pill.textContent = "generating"; }
+  else { pill.className = "pill idle"; pill.textContent = "idle"; }
+
+  const snapshots = history
+    ? Object.values(history.revisions).reduce((n, revisions) => n + revisions.length, 0) : null;
+  const decisions = history ? history.audit.total : null;
+  const signature = JSON.stringify({pending, running, skills: skills.length, snapshots, decisions});
+  if (signature !== boardSignature) {
+    const parts = [`${skills.length} skills tracked`, `${pending} awaiting review`,
+      `${running} SkillOpt runs active`];
+    if (snapshots != null) parts.push(`${snapshots} rollback points`, `${decisions} recorded decisions`);
+    $("#board-announcer").textContent = `Board updated: ${parts.join(", ")}.`;
+    boardSignature = signature;
+  }
+}
+
+// The board re-polls every 3s. Rebuilding the history rows on every poll reset each revision
+// picker to its first option, so a reviewer who chose an older snapshot lost that choice roughly
+// as fast as they could reach the button. Skip the rebuild when nothing changed, and carry any
+// selection across the rebuilds that do happen.
+let historySignature = null;
+const stamp = seconds => seconds ? new Date(seconds * 1000).toLocaleString() : "time unrecorded";
+
+function renderHistory(h) {
+  const signature = JSON.stringify(h);
+  if (signature === historySignature) return;
+  const chosen = {};
+  document.querySelectorAll("#history select").forEach(el => { chosen[el.id] = el.value; });
+
+  const names = Object.keys(h.revisions).sort();
+  const rows = names.map(name => `
+    <div class="hrow">
+      <span class="hname">${esc(name)}</span>
+      <span class="hmeta">${h.revisions[name].length} snapshot${h.revisions[name].length > 1 ? "s" : ""}</span>
+      <div class="hact">
+        <select id="rev-${esc(name)}" aria-label="revision to restore for ${esc(name)}">
+          ${h.revisions[name].map(r => `<option value="${esc(r.revision)}">${esc(shortRev(r.revision))} · snapshotted ${esc(stamp(r.created))}</option>`).join("")}
+        </select>
+        <button class="btn" onclick="rollback('${esc(name)}')">Roll back</button>
+      </div>
+    </div>`).join("");
+  const trail = h.audit.records.map(r =>
+    `<div><span class="aact${r.action === "reject" ? " reject" : ""}">${esc(r.action || "?")}</span> ${esc(r.skill || "?")}
+     @ ${esc(shortRev(r.revision))} · ${esc(stamp(r.ts))}
+     · ${esc(r.actor || "unknown")}${r.reason ? ` · reason: ${esc(r.reason)}` : ""}</div>`).join("");
+  $("#history").innerHTML =
+    (rows ? `<div class="hlist">${rows}</div>`
+          : `<div class="empty"><div class="et">No snapshots yet.</div>
+             <div class="ed">The first approved promotion snapshots the revision it replaces, and that
+             snapshot becomes a rollback target.</div></div>`) +
+    (trail ? `<div class="audit">${trail}</div>` : "");
+
+  Object.entries(chosen).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el && [...el.options].some(o => o.value === value)) el.value = value;
+  });
+  historySignature = signature;
+}
+
+async function rollback(skill) {
+  const picker = document.getElementById(`rev-${skill}`);
+  if (!picker) return;
+  const revision = picker.value;
+  await act("#history-msg", async () =>
+    (await j(`/api/rollback/${skill}/${revision}`, {method: "POST"})).result);
+}
+
+let skillsSignature = null;
+
+function renderSkills(skills, runs = {}, history = null) {
+  if (history) {
+    revisionInventory = history.revisions || {};
+    revisionInventoryReady = true;
+  }
+  const signature = JSON.stringify({skills, runs, revisionInventory, revisionInventoryReady});
+  if (signature === skillsSignature) return;
+  skillInventory = skills;
+  runInventory = runs;
+  skillsSignature = signature;
+  renderSkillRows();
+}
+
+function renderSkillRows() {
+  if (!skillInventory.length) {
+    $("#skills-list").innerHTML =
+      `<div class="empty"><div class="et">No skills registered.</div>
+       <div class="ed">Fetch or create skills under <code>skills/&lt;name&gt;/SKILL.md</code>
+       and they will appear here.</div></div>`;
+    $("#skill-filter-count").textContent = "0 skills";
+    return;
+  }
+  const query = $("#skill-search").value.trim().toLowerCase();
+  const filter = $("#skill-filter").value;
+  const visible = skillInventory.filter(s => {
+    const matchesText = !query || `${s.name} ${s.description}`.toLowerCase().includes(query);
+    const matchesFilter = filter === "all" || (filter === "pending" && s.pending) ||
+      (filter === "evals" && s.has_tasks) || (filter === "no-evals" && !s.has_tasks);
+    return matchesText && matchesFilter;
+  });
+  $("#skill-filter-count").textContent = `${visible.length} of ${skillInventory.length}`;
+  if (!visible.length) {
+    $("#skills-list").innerHTML =
+      `<div class="empty"><div class="et">No skills match.</div>
+       <div class="ed">Change the search text or filter to see more skills.</div></div>`;
+    return;
+  }
+  const ordered = [...visible].sort((a, b) => (b.pending - a.pending) || (b.has_tasks - a.has_tasks));
+  $("#skills-list").innerHTML = ordered.map(s => {
+    const run = runInventory[s.name];
+    const lines = run?.log || [];
+    const versionCount = 1 + (s.pending ? 1 : 0) + (revisionInventory[s.name] || []).length;
+    const versionChip = revisionInventoryReady
+      ? `<span class="chip mute" title="active, pending, and snapshotted versions">${versionCount} version${versionCount === 1 ? "" : "s"}</span>`
+      : `<span class="chip mute" title="revision history is still loading">versions …</span>`;
+    const runLog = run && (run.status === "running" || lines.length) ? `
+      <div class="skill-run${run.status === "error" ? " error" : ""}" role="log"
+        aria-live="polite" aria-relevant="additions text"
+        aria-label="SkillOpt log for ${esc(s.name)}">
+        <div class="skill-run-head"><span>SkillOpt ${esc(run.status || "running")}</span>
+          <span class="count">${lines.length} log line${lines.length === 1 ? "" : "s"}</span></div>
+        ${run.status === "running" ? `<p class="skill-run-note">Optimization can take a few minutes. This log updates automatically.</p>` : ""}
+        <pre class="skill-run-log">${esc(lines.length ? lines.join("\n") : "Waiting for the first log entry…")}</pre>
+      </div>` : "";
+    return `
+    <div class="srow${s.pending ? " pend" : ""}${s.has_tasks ? "" : " noev"}" data-skill="${esc(s.name)}">
+      <button class="main skill-open" onclick="openSkillVersions('${esc(s.name)}')"
+        aria-label="View ${esc(s.name)} versions and contents">
+        <div class="nameline"><span class="sname">${esc(s.name)}</span>${statusChip(s)}
+          ${s.revision ? `<span class="chip mute">rev ${esc(shortRev(s.revision))}</span>` : ""}
+          ${versionChip}
+          ${s.uses ? `<span class="chip mute" title="times this skill's instructions were served">${s.uses} use${s.uses === 1 ? "" : "s"}</span>` : ""}</div>
+        <p class="sdesc">${esc(s.description)}</p>
+      </button>
+      <div class="sactions">
+        ${s.pending ? `<button class="btn primary" onclick="showPending('${esc(s.name)}', {scroll: true})">Review change</button>` : ""}
+        <button class="btn" onclick="generateCandidate('${esc(s.name)}')"
+          ${s.status === "running" || !s.has_tasks ? "disabled" : ""}
+          ${s.has_tasks ? "" : `title="no eval task set; docker compose run --rm optimize ${esc(s.name)} auto-drafts one"`}>
+          ${s.status === "running" ? "optimizing…" : "Optimize with SkillOpt"}</button>
+      </div>
+      ${runLog}
+    </div>`;
+  }).join("");
+  document.querySelectorAll(".skill-run-log").forEach(log => { log.scrollTop = log.scrollHeight; });
+}
+
+$("#skill-search").oninput = renderSkillRows;
+$("#skill-filter").onchange = renderSkillRows;
+
+let skillVersionFiles = [];
+const versionLabel = v => v.kind === "active" ? `Active · ${shortRev(v.revision)}`
+  : v.kind === "pending" ? `Pending challenger · ${shortRev(v.revision) || "unversioned"}`
+  : `Snapshot · ${shortRev(v.revision)} · ${stamp(v.created)}`;
+
+async function openSkillVersions(skill) {
+  $("#skill-detail-name").textContent = skill;
+  $("#skill-version").innerHTML = "";
+  $("#skill-file").innerHTML = "";
+  $("#skill-version-content").textContent = "";
+  $("#skill-version-desc").textContent = "";
+  $("#skill-version-meta").innerHTML = "";
+  say("#skill-version-msg", "Loading versions…", false);
+  $("#skill-overlay").hidden = false;
+  try {
+    const summary = await j(`/api/skills/${encodeURIComponent(skill)}/versions`);
+    $("#skill-version").innerHTML = summary.versions.map(v =>
+      `<option value="${esc(v.key)}">${esc(versionLabel(v))}</option>`).join("");
+    await loadSkillVersion();
+  } catch (e) {
+    say("#skill-version-msg", `⛔ ${e.message}`, true);
+  }
+}
+
+async function loadSkillVersion() {
+  const skill = $("#skill-detail-name").textContent;
+  const version = $("#skill-version").value;
+  if (!skill || !version) return;
+  say("#skill-version-msg", "Loading version…", false);
+  try {
+    const detail = await j(`/api/skills/${encodeURIComponent(skill)}/versions/${encodeURIComponent(version)}`);
+    const skillMd = `---\nname: ${detail.skill}\ndescription: ${JSON.stringify(detail.description)}\n---\n\n${detail.body}`;
+    skillVersionFiles = [{path: "SKILL.md", content: skillMd}, ...(detail.files || [])];
+    $("#skill-file").innerHTML = skillVersionFiles.map((file, i) =>
+      `<option value="${i}">${esc(file.path)}</option>`).join("");
+    $("#skill-version-meta").innerHTML =
+      `<span class="chip ${detail.kind === "active" ? "pass" : (detail.kind === "pending" ? "rust" : "mute")}">${esc(detail.kind)}</span>` +
+      `<span class="chip mute">rev ${esc(shortRev(detail.revision) || "unrecorded")}</span>` +
+      (detail.created ? `<span class="chip mute">${esc(stamp(detail.created))}</span>` : "");
+    $("#skill-version-desc").textContent = detail.description;
+    renderSkillVersionFile();
+    say("#skill-version-msg", "", false);
+  } catch (e) {
+    say("#skill-version-msg", `⛔ ${e.message}`, true);
+  }
+}
+
+function renderSkillVersionFile() {
+  const file = skillVersionFiles[Number($("#skill-file").value) || 0];
+  $("#skill-version-content").textContent = file ? file.content : "";
+}
+
+function closeSkillVersions() { $("#skill-overlay").hidden = true; }
+$("#skill-close").onclick = closeSkillVersions;
+$("#skill-overlay").onclick = e => { if (e.target === $("#skill-overlay")) closeSkillVersions(); };
+$("#skill-version").onchange = loadSkillVersion;
+$("#skill-file").onchange = renderSkillVersionFile;
+
+// One failing endpoint must not blank the board: each section renders from what it got, and says
+// so when its own data is missing, instead of the whole poll rejecting and leaving stale or empty
+// panels with no explanation.
+let refreshing = false;
+async function refresh() {
+  if (document.hidden || refreshing) return;
+  refreshing = true;
+  try {
+    const [skills, runs, hist] = (await Promise.allSettled(
+      [j("/api/skills"), j("/api/runs"), j("/api/history")]))
+      .map(r => r.status === "fulfilled" ? r.value : null);
+
+    if (skills) {
+      renderSkills(skills, runs || runInventory, hist);
+      renderBoard(skills, skills.filter(s => s.has_tasks), hist);
+      clearLoadError("#skills-msg");
+    } else {
+      say("#skills-msg", "⛔ could not load skills; retrying every 3s", true, "load");
+    }
+    if (hist) { renderHistory(hist); clearLoadError("#history-msg"); }
+    else { say("#history-msg", "⛔ could not load history; retrying every 3s", true, "load"); }
+    if (!booted && skills) { staggerIn("#attention .alert"); staggerIn("#skills-list .srow"); booted = true; }
+
+    if (skills) syncReviewCard(skills);
+  } finally {
+    refreshing = false;
+  }
+}
+
+// The card on screen can stop being reviewable while the reviewer is looking at it: they approved
+// or rejected it, or another process consumed the slot. Leaving it up with a live Approve button
+// offers a decision that 404s, so follow the queue: show the next quarantined change instead, and
+// carry the last action's result across (the poll did not produce it, so the poll must not eat it).
+function syncReviewCard(skills) {
+  const quarantined = skills.filter(s => s.pending).map(s => s.name);
+  if (!quarantined.length) { showNoPending(); return; }
+  if (!currentPending || !quarantined.includes(currentPending)) {
+    showPending(quarantined[0], {keepMessage: true});
+  }
+}
+
+// SkillOpt only ever writes a quarantined candidate.
+async function generateCandidate(skill) {
+  await act("#skills-msg", async () =>
+    `started SkillOpt for '${(await j(`/api/optimize/${skill}`, {method: "POST"})).started}'; optimization can take a few minutes`);
+}
+
+function colorizeDiff(diff) {
+  if (!diff) return "(no textual diff)";
+  return diff.split("\n").map(l => {
+    const e = esc(l);
+    if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("diff")) return `<span class="meta">${e}</span>`;
+    if (l.startsWith("@@")) return `<span class="hunk">${e}</span>`;
+    if (l.startsWith("+")) return `<span class="add">${e}</span>`;
+    if (l.startsWith("-")) return `<span class="del">${e}</span>`;
+    return e;
+  }).join("\n");
+}
+
+function showNoPending() {
+  currentPending = null;
+  currentPendingData = null;
+  $("#pending-card").hidden = true;
+  $("#review-empty").hidden = false;
+  $("#pending-heading").textContent = "No pending changes";
+  $("#pending-copy").textContent =
+    "Quarantined changes land here with their evidence. Nothing serves traffic until you approve it.";
+}
+
+// The recorded bundle, read back through the API's own containment check. It is advisory
+// rendering: a missing or unreadable bundle must not hide the diff and the decision.
+async function showEvidence(skill) {
+  const pre = $("#evidence");
+  pre.textContent = "loading…";
+  try {
+    const e = await j(`/api/evidence/${skill}`);
+    pre.textContent = `runs/evidence/${e.path}\n\n${e.markdown}`;
+  } catch (err) {
+    pre.textContent = `(no readable evidence bundle: ${err.message})`;
+  }
+}
+
+function renderRisk(risk) {
+  const r = risk || {added_lines: 0, removed_lines: 0, changed_pct: 0, size_delta_pct: 0};
+  const signed = n => `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(1)}%`;
+  const warning = r.high_risk
+    ? `<div class="risk-warning">⚠ High-risk rewrite: inspect the full body before deciding.</div>` : "";
+  const el = $("#risk-summary");
+  el.classList.toggle("high", Boolean(r.high_risk));
+  el.innerHTML =
+    `<div class="risk-stat"><b>+${r.added_lines}</b><span>lines added</span></div>` +
+    `<div class="risk-stat"><b>−${r.removed_lines}</b><span>lines removed</span></div>` +
+    `<div class="risk-stat"><b>${Number(r.changed_pct).toFixed(1)}%</b><span>body changed</span></div>` +
+    `<div class="risk-stat"><b>${signed(r.size_delta_pct)}</b><span>body size</span></div>` + warning;
+}
+
+function renderSideDiff(comparison) {
+  const rows = (comparison || []).map(part =>
+    `<section class="side-component"><h4>${esc(part.component)}</h4><div class="side-columns">` +
+      `<div class="side-column"><span class="side-label">Before</span><pre>${esc(part.before)}</pre></div>` +
+      `<div class="side-column"><span class="side-label">After</span><pre>${esc(part.after)}</pre></div>` +
+    `</div></section>`).join("");
+  $("#side-diff-body").innerHTML = rows ||
+    `<div class="empty"><div class="ed">No component comparison is available.</div></div>`;
+  $("#side-diff").open = false;
+}
+
+// `keepMessage` is set when the poll switched cards by itself: a reviewer who just approved a
+// change has to keep reading "Promoted ...", while opening a card by hand clears the previous one.
+async function showPending(skill, {keepMessage = false, scroll = false} = {}) {
+  let p;
+  try {
+    p = await j(`/api/pending/${skill}`);
+  } catch (e) {
+    say("#pending-msg", `⛔ ${e.message}`, true);
+    return;
+  }
+  currentPending = skill;
+  currentPendingData = p;
+  $("#pending-card").hidden = false;
+  $("#review-empty").hidden = true;
+  $("#pending-heading").textContent = "Pending change: " + skill;
+  $("#pending-copy").textContent =
+    "Held-out evidence for this change is below. Approval snapshots the current revision and swaps atomically, so promote only a clear, gate-passing win.";
+  $("#approve").textContent = "Approve & promote";
+  // stale evidence describes a champion that has since moved on disk: promotion would refuse it,
+  // so the review card refuses it first rather than after the click
+  $("#approve").disabled = Boolean((p.gate && !p.gate.promotable) || p.stale);
+  // A record without candidate-search scores simply renders without the line.
+  const search = p.inner_loop;
+  let detail;
+  if (p.ab) {  // quality pass: judge scores + token shift through the full agent
+    const c = p.ab.champion, ch = p.ab.challenger, chalWins = ch.mean > c.mean;
+
+    const cand = (role, o, win) =>
+      `<div class="cand ${win ? "win" : "lose"}"><span class="role">${role}</span>
+       <span class="score">${o.mean.toFixed(3)}</span>
+       <span class="foot">judge score · ${o.scores.length} tasks</span></div>`;
+    const duel = `<div class="duel">${cand("champion", c, !chalWins)}
+      <span class="versus">vs</span>${cand("challenger", ch, chalWins)}</div>`;
+
+    const meta = `<div class="metaline">${search
+        ? `candidate search <b>${search.seed_score.toFixed(2)} → ${search.best_score.toFixed(2)}</b> · ` : ""}
+      <a href="${langfuseUrl}" target="_blank" rel="noopener">runs in Langfuse: ${esc(p.dataset)} ↗</a>
+      ${p.evidence ? `<br>evidence bundle <b>${esc(p.evidence.markdown)}</b>` : ""}</div>`;
+
+    let tok = "";
+    if (c.tokens && ch.tokens) {
+      const dOut = ch.tokens.mean_output - c.tokens.mean_output;
+      const dIn = ch.tokens.mean_input - c.tokens.mean_input;
+      const regress = dOut > 0.1 * c.tokens.mean_output;  // output tokens are the cost that matters
+      tok = `<div class="tokline">input tokens/task <b>` +
+        `${c.tokens.mean_input.toFixed(0)} → ${ch.tokens.mean_input.toFixed(0)} ` +
+        `(${dIn >= 0 ? "+" : ""}${dIn.toFixed(0)})</b>` +
+        ` · output <b${regress ? ' class="reg"' : ""}>` +
+        `${c.tokens.mean_output.toFixed(0)} → ${ch.tokens.mean_output.toFixed(0)} ` +
+        `(${dOut >= 0 ? "+" : ""}${dOut.toFixed(0)})${regress ? " ⚠ regression" : ""}</b></div>`;
+    }
+    detail = duel + meta + tok;
+  } else {     // routing pass: embedding-router metrics, no LLM involved
+    const c = p.routing.champion, ch = p.routing.challenger;
+    const cell = (a, b) => `${a.toFixed(3)} → <b class="${b > a ? "win" : (b < a ? "lose" : "")}">${b.toFixed(3)}</b>`;
+    detail = `<div class="metaline">routing pass (description), top-1 ${cell(c.top1, ch.top1)} · ` +
+      `recall@3 ${cell(c.recall_at_3, ch.recall_at_3)} · ` +
+      `no-route precision ${cell(c.no_route_precision, ch.no_route_precision)}</div>` +
+      (search ? `<div class="metaline">embedding router · candidate search ` +
+        `<b>${search.seed_score.toFixed(2)} → ${search.best_score.toFixed(2)}</b></div>` : "");
+  }
+
+  const changed = (p.changed && p.changed.length)
+    ? `<div class="changed"><span class="cl">components changed</span>` +
+      p.changed.map(x => `<span class="chip rust">${esc(x)}</span>`).join("") + `</div>`
+    : "";
+
+  const gate = p.gate && !p.gate.promotable
+    ? `<div class="gate block">⛔ Evidence gate: ${esc(p.gate.blocked.join("; "))}. Approval is refused.</div>`
+    : (p.gate ? `<div class="gate ok">✓ Passes the evidence gate</div>` : "");
+
+  const warn = (p.gate && p.gate.warnings && p.gate.warnings.length)
+    ? `<div class="gate warn">⚠ ${esc(p.gate.warnings.join("; "))}</div>`
+    : "";
+
+  const stale = p.stale
+    ? `<div class="gate block">⛔ Stale evidence: ${esc(p.stale)}. Approval is refused.</div>`
+    : "";
+
+  $("#pending-detail").innerHTML = detail + changed + gate + warn + stale;
+  renderRisk(p.risk);
+  $("#diff").innerHTML = colorizeDiff(p.diff);
+  renderSideDiff(p.comparison);
+  if (!keepMessage) say("#pending-msg", "", false);
+  $("#evidence-label").hidden = $("#evidence").hidden = false;
+  showEvidence(skill);
+  if (scroll) {
+    $("#review-section").scrollIntoView({behavior: REDUCED ? "auto" : "smooth", block: "start"});
+    $("#pending-heading").focus({preventScroll: true});
+  }
+}
+
+// Approve opens a comparison panel with model, token, and per-task evidence. Its primary action is
+// the final promotion decision, so the user does not have to click a third confirmation button.
+const num = x => (x == null ? "," : Number(x).toFixed(0));
+const sc = x => (x == null ? "," : Number(x).toFixed(3));
+function delta(before, after, lowerBetter) {
+  if (before == null || after == null) return "";
+  const d = after - before, cls = d === 0 ? "" : ((lowerBetter ? d < 0 : d > 0) ? "win" : "lose");
+  const v = Math.abs(d) < 1 ? d.toFixed(3) : Math.round(d).toString();  // scores keep decimals, tokens whole
+  return `<span class="${cls}">${d >= 0 ? "+" : ""}${v}</span>`;
+}
+function buildCompare(p) {
+  const ab = p.ab || {}, c = ab.champion || {}, ch = ab.challenger || {};
+  const ct = c.tokens || {}, cht = ch.tokens || {};
+  const beforeScores = c.scores || [], afterScores = ch.scores || [];
+  const scoreRows = Array.from({length: Math.max(beforeScores.length, afterScores.length)}, (_, i) =>
+    `<tr><td>Task ${i + 1}</td><td>${sc(beforeScores[i])}</td><td>${sc(afterScores[i])}</td>` +
+    `<td>${delta(beforeScores[i], afterScores[i], false)}</td></tr>`).join("");
+  const models = `<div class="cmp-sec"><h4>Model breakdown</h4>
+    <div class="cmp-kv"><span>Serving model (runs the skill)</span><code>${esc(p.model || ",")}</code></div>
+    <div class="cmp-kv"><span>Judge (LLM-as-a-judge)</span><code>${esc(p.judge || ",")}</code></div></div>`;
+  const scores = `<div class="cmp-sec"><h4>LLM-as-a-judge score · ${beforeScores.length} held-out tasks</h4>
+    <table class="cmp-tbl"><tr><th></th><th>before</th><th>after</th><th>Δ</th></tr>
+      <tr><td>mean</td><td>${sc(c.mean)}</td><td>${sc(ch.mean)}</td><td>${delta(c.mean, ch.mean, false)}</td></tr>
+      ${scoreRows}
+    </table></div>`;
+  const tokens = `<div class="cmp-sec"><h4>Token usage / task, before → after</h4>
+    <table class="cmp-tbl"><tr><th></th><th>before</th><th>after</th><th>Δ</th></tr>
+      <tr><td>input</td><td>${num(ct.mean_input)}</td><td>${num(cht.mean_input)}</td><td>${delta(ct.mean_input, cht.mean_input, true)}</td></tr>
+      <tr><td>output</td><td>${num(ct.mean_output)}</td><td>${num(cht.mean_output)}</td><td>${delta(ct.mean_output, cht.mean_output, true)}</td></tr>
+    </table></div>`;
+  return models + scores + tokens;
+}
+function openCompare() {
+  const p = currentPendingData;
+  if (!p) return;
+  $("#cmp-skill").textContent = currentPending;
+  $("#cmp-body").innerHTML = buildCompare(p);
+  say("#cmp-msg", "", false);
+  $("#cmp-overlay").hidden = false;
+}
+function closeCompare() { $("#cmp-overlay").hidden = true; }
+$("#approve").onclick = openCompare;
+$("#cmp-cancel").onclick = closeCompare;
+$("#cmp-cancel2").onclick = closeCompare;
+$("#cmp-approve").onclick = () => act("#cmp-msg", async () => {
+  const r = (await j(`/api/promote/${currentPending}`, {method: "POST"})).result;
+  closeCompare();
+  say("#pending-msg", r, false);
+  return r;
+});
+
+function openReject() {
+  if (!currentPending) return;
+  $("#reject-skill").textContent = currentPending;
+  $("#reject-reason").value = "";
+  say("#reject-msg", "", false);
+  $("#reject-overlay").hidden = false;
+  $("#reject-reason").focus();
+}
+function closeReject() { $("#reject-overlay").hidden = true; }
+$("#reject").onclick = openReject;
+$("#reject-close").onclick = closeReject;
+$("#reject-cancel").onclick = closeReject;
+$("#reject-overlay").onclick = e => { if (e.target === $("#reject-overlay")) closeReject(); };
+$("#reject-confirm").onclick = () => act("#reject-msg", async () => {
+  const skill = currentPending;
+  const result = (await j(`/api/reject/${skill}`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({reason: $("#reject-reason").value})
+  })).result;
+  closeReject();
+  say("#pending-msg", result, false);
+  return result;
+});
+
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (!$("#reject-overlay").hidden) closeReject();
+  else if (!$("#skill-overlay").hidden) closeSkillVersions();
+  else if (!$("#cmp-overlay").hidden) closeCompare();
+});
+
+j("/api/config").then(c => {
+  langfuseUrl = c.langfuse_url;
+  $("#lf").href = c.langfuse_url; $("#lf2").href = c.langfuse_url;
+});
+refresh(); setInterval(refresh, 3000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+});
+
+// scroll-reveal: enhance already-visible scaffold only (reduced-motion honored via CSS)
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const io = new IntersectionObserver((es, o) => es.forEach(e => {
+    if (e.isIntersecting) { e.target.classList.add("in"); o.unobserve(e.target); }
+  }), {rootMargin: "0px 0px -8% 0px"});
+  document.querySelectorAll(".reveal").forEach(el => io.observe(el));
+} else {
+  document.querySelectorAll(".reveal").forEach(el => el.classList.add("in"));
+}
+</script>
+</body>
+</html>

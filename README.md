@@ -30,8 +30,9 @@ What the system guarantees:
 
 Built for individual users first, ready to share:
 
-- **Lite.** `docker compose up` starts just the router and the change-control UI; the tracing stack
-  is an optional upgrade (`--profile langfuse`), not a requirement.
+- **Batteries included.** `docker compose up` starts the router, the change-control UI, and a
+  self-hosted Langfuse for traces and experiments. An included Compose override connects Cloud or
+  another self-hosted Langfuse without starting the bundled stack.
 - **Local.** Point it at Ollama or vLLM and it runs with no API key; nothing leaves your machine.
 - **Secure.** Hosted calls default to OpenRouter with zero-data-retention routing enforced on every
   request, everything binds localhost, and the shared UI has an optional password gate.
@@ -51,8 +52,7 @@ produces proposals, never activations.
 git clone https://github.com/SlanchaAI/ingot.git && cd ingot
 cp .env.example .env               # add an OpenRouter key, or point BASE_URL at Ollama (no key)
 scripts/fetch_skills.sh all        # fetch ~70 real skills into ./skills (see docs/skill-sources.md)
-docker compose up                  # lite by default: skill router (:8000) + change-control UI (:8080)
-                                   #   + one demo agent run
+docker compose up                  # router (:8000), UI (:8080), Langfuse (:3100), and one agent run
 docker compose run --rm agent "How do I merge several PDFs into one and add page numbers?"
 ```
 
@@ -60,12 +60,81 @@ The change-control UI at `localhost:8080` asks for a login; the compose default 
 `ingot`**. Change `AUTH_PASSWORD` in `.env` before sharing it on your LAN (or set it empty to run
 open), see [Privacy & security](docs/security.md#network-exposure).
 
-Everything runs in lite mode against a local JSONL trace store, so no external stack is required;
-`docker compose --profile langfuse up` adds the self-hosted Langfuse (traces + experiment UI) if you
-want it. Trace-store, model, and gate settings live in [Configuration](docs/configuration.md).
+`docker compose up` brings up a self-hosted Langfuse (traces + experiment UI) alongside the router
+and UI; trace mining reads from it and has no local fallback, so it fails loudly if no
+Langfuse-compatible backend is reachable. To send traces to your own Langfuse without starting the
+bundled containers, set `LANGFUSE_*` and use `docker-compose.external-langfuse.yml` as documented in
+[Configuration](docs/configuration.md#using-your-own-langfuse-project). Backend, model, and gate
+settings live in [Configuration](docs/configuration.md).
 
-Then walk the full loop, a stale Tailwind skill mined, rewritten, gated, and promoted, in the
+Then walk through the full loop, from mining a stale Tailwind skill through promotion, in the
 [**Tutorial**](docs/tutorial.md).
+
+For a hardened open-source Langfuse deployment with agents on other LAN machines, follow
+[Production setup](PRODUCTION_SETUP.md).
+
+### Connect Claude Code or Codex
+
+You can use Ingot with your existing coding agent instead of the bundled demo agent. Start the
+stack, then run the setup script for your agent. The Codex connector requires Codex 0.128 or newer,
+Node.js 22 or newer, and Python 3. The Claude Code connector requires `uv` (recommended), or
+Python 3.10 or newer with `pip` and the Langfuse 4.x SDK:
+
+```bash
+# macOS, install only the dependencies your selected agent needs
+brew install node@22       # Codex
+brew install uv            # Claude Code
+brew install python@3.12   # Codex when python3 is missing, or Claude's fallback runtime
+
+docker compose up -d
+./scripts/claude_setup.sh
+# or
+./scripts/codex_setup.sh
+```
+
+Both scripts are safe to run again. Use `--doctor` to inspect versions, installed connectors,
+configuration, and Langfuse reachability without changing anything. Use `--repair` to replace a
+mismatched MCP registration and reinstall managed dependencies or plugins:
+
+```bash
+./scripts/claude_setup.sh --doctor
+./scripts/claude_setup.sh --repair
+./scripts/codex_setup.sh --doctor
+./scripts/codex_setup.sh --repair
+```
+
+Each script adds `http://localhost:8000/mcp` as the user-level `ingot` MCP server and installs the
+official Langfuse observability connector. Claude Code prompts for the Langfuse URL and project keys
+after restart only when configuration is incomplete. The setup script supplies `LANGFUSE_*` values
+or the bundled local defaults during installation. The Codex script writes a private
+`~/.codex/langfuse.json`; it defaults to the bundled Langfuse at `http://localhost:3100` with the
+local demo project keys.
+
+For Langfuse Cloud or another self-hosted project, provide its values when running the Codex setup:
+
+```bash
+LANGFUSE_BASE_URL=https://cloud.langfuse.com \
+LANGFUSE_PUBLIC_KEY=pk-lf-... \
+LANGFUSE_SECRET_KEY=sk-lf-... \
+./scripts/codex_setup.sh
+```
+
+Set `INGOT_MCP_URL` if the MCP server is not on localhost. The connectors record prompts, responses,
+reasoning summaries, and tool inputs and outputs, including Ingot MCP calls, so do not enable them
+for sessions whose contents must not be stored in Langfuse. Their trace-root shapes are accepted by
+`optimize-mine`; untagged turns are attributed to skills by task similarity. See
+[Bring your own agent](docs/mcp-integration.md) for the trace contract and routing behavior.
+Tell the agent to call `ingot.route_and_load` once at the start of each request and follow the
+returned `skill_body`; connecting the MCP server makes the tool available but does not force its use.
+Add this as a persistent `CLAUDE.md` or `AGENTS.md` rule, not just a one-time chat prompt. See
+[Make skill loading part of the agent instructions](docs/mcp-integration.md#make-skill-loading-part-of-the-agent-instructions).
+For an agent on another machine, see [Agent on another LAN machine](docs/mcp-integration.md#agent-on-another-lan-machine).
+Verify that the services are reachable before starting the agent:
+
+```bash
+curl http://localhost:8000/mcp                 # an HTTP error response still proves MCP is listening
+curl http://localhost:3100/api/public/health  # should return a healthy Langfuse response
+```
 
 ## How it works
 

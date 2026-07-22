@@ -18,10 +18,11 @@ Three properties, all defaults, none optional:
   retains prompts. Provider-direct endpoints work too: Fireworks AI, for example, is
   [zero-data-retention by default](https://docs.fireworks.ai/guides/security_compliance/data_handling)
   for open models on serverless, under its own retention policy.
-- **Self-hosted tracing.** Traces default to a local JSONL store on your machine; the full Langfuse
-  stack (Postgres, ClickHouse, MinIO) runs self-hosted inside the compose stack under
-  `--profile langfuse`. Either way the trace store stays on your machine (hosted inference is the
-  separate exception noted below).
+- **Self-hosted tracing.** The default evals backend is a self-hosted Langfuse (Postgres,
+  ClickHouse, MinIO) that runs inside the compose stack, so traces stay on your machine (hosted
+  inference is the separate exception noted below). Its ports are bound to `127.0.0.1` and its
+  datastores publish no host port; before exposing it beyond your machine, rotate the demo
+  credentials; see [Securing the Langfuse deployment](#securing-the-langfuse-deployment).
 - **Localhost only.** No service is reachable off the machine (see
   [Network exposure](#network-exposure)).
 
@@ -38,11 +39,11 @@ API_KEY=sk-or-...
 BASE_URL=https://api.fireworks.ai/inference/v1
 API_KEY=fw_...
 AGENT_MODEL=accounts/fireworks/models/qwen3p7-plus
-GEPA_MODEL=accounts/fireworks/models/glm-5p2
+SKILLOPT_MODEL=accounts/fireworks/models/glm-5p2
 JUDGE_MODEL=accounts/fireworks/models/deepseek-v4-pro
 
 # fully local (no key needed at all): everything on Ollama / vLLM
-BASE_URL=http://172.17.0.1:11434/v1  AGENT_MODEL=qwen3:32b  GEPA_MODEL=qwen3:32b  JUDGE_MODEL=llama3.3:70b
+BASE_URL=http://172.17.0.1:11434/v1  AGENT_MODEL=qwen3:32b  SKILLOPT_MODEL=qwen3:32b  JUDGE_MODEL=llama3.3:70b
 ```
 
 No API key is required when nothing points at a hosted endpoint. From inside the compose
@@ -117,9 +118,49 @@ if you can. For a shared or company-wide deployment, [Sign in with Google](sso.m
 the signed-in email as the audit actor. For authenticating the MCP serving endpoints themselves, put
 an authenticating reverse proxy in front.
 
+### Securing the Langfuse deployment
+
+The self-hosted Langfuse evals backend comes up with `docker compose up`, so its exposure matters.
+Two things keep the defaults safe on a single machine:
+
+- **Nothing is published beyond loopback.** Only `langfuse-web` maps a host port, on
+  `127.0.0.1:3100`; Postgres, ClickHouse, MinIO, and Redis publish no host port at all and are
+  reachable only on the internal compose network.
+- **Every credential is a demo literal you can override.** The bundled `SALT`, `ENCRYPTION_KEY`
+  (all-zeros), `NEXTAUTH_SECRET`, datastore passwords, project API keys (`pk/sk-lf-local-demo`), and
+  web login (`demo@local.dev` / `localdemo123`) are safe *only* because of the loopback binding above.
+
+Before exposing Langfuse beyond your machine, rotate every demo secret and use its separate,
+opt-in TLS endpoint. The normal `lan` proxy publishes only the change-control UI, so sharing the UI
+does not also publish traces. For a new deployment:
+
+1. Copy every value in `.env.example` under "LANGFUSE SECURITY" into `.env` and replace the demo
+   values before the first `docker compose up`. At minimum set `LANGFUSE_ENCRYPTION_KEY`,
+   `LANGFUSE_SALT`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_INIT_USER_PASSWORD`, every datastore
+   credential, and the Langfuse project keys.
+2. Set `LANGFUSE_HOST` and `LANGFUSE_BIND_ADDRESS` to the host's trusted DNS name or private IP.
+   Set `LANGFUSE_PUBLIC_URL=https://<same-name-or-IP>:3443`. The public URL must match the URL used
+   by browsers so Langfuse generates the correct authentication URLs. The explicit host also keeps
+   certificate issuance limited to that identity, and the bind address keeps the listener off
+   unrelated host interfaces.
+3. Run `docker compose --profile langfuse-lan up -d langfuse-proxy`, then browse to that URL. Caddy
+   uses its local CA, with the same trust considerations described under Network exposure.
+
+The `.env` defaults initialize a new deployment; they are not a general credential-rotation
+mechanism. `LANGFUSE_INIT_*` values create resources only when they do not already exist, and the
+Postgres image applies `POSTGRES_PASSWORD` only when it initializes an empty data directory. On a
+disposable demo, stop Compose, remove the four `ingot_langfuse_*_data` volumes and the
+`ingot_langfuse_clickhouse_logs` volume, set `.env`, and start again. This permanently deletes
+existing traces. On a deployment whose traces must survive, back up
+the datastores, rotate database and object-store credentials with their native administration tools,
+rotate the user and project credentials in Langfuse, update `.env`, and then restart the stack. Do
+not replace `LANGFUSE_ENCRYPTION_KEY` or `LANGFUSE_SALT` on an initialized deployment without the
+corresponding Langfuse migration procedure. Langfuse documents the create-only behavior in its
+[headless initialization guide](https://langfuse.com/self-hosting/administration/headless-initialization).
+An all-zeros `ENCRYPTION_KEY` makes encryption of stored secrets worthless if the volumes leak.
+
 Deliberately not done: we do not scan or denylist skill content (shell commands, `.env` mentions,
 `curl … | sh`), because legitimate skills routinely contain code and install steps; human review at
 the approval step is the content check. Contain the residual risk operationally: run the agent in a
 container without real secrets or sensitive host paths. Further reading:
 [OpenAI on prompt injection](https://openai.com/safety/prompt-injections/).
-

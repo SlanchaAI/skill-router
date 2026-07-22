@@ -14,8 +14,9 @@ scripts/fetch_skills.sh all        # fetch ~70 real skills into ./skills (see Sk
 docker compose up --build
 ```
 
-This brings up the MCP server (`localhost:8000`) and the change-control UI (`localhost:8080`), then
-runs the agent once on a demo task. The UI lists every skill the router serves, each with its
+This brings up the MCP server (`localhost:8000`), the change-control UI (`localhost:8080`), and a
+self-hosted Langfuse for traces and experiments (`localhost:3100`), then runs the agent once on a
+demo task. (First boot pulls the Langfuse stack, so give it a minute.) The UI lists every skill the router serves, each with its
 content-hash revision and a load count (how often it has actually been served), and surfaces
 anything awaiting review:
 
@@ -52,8 +53,8 @@ A routed task runs on the cheap `AGENT_MODEL` because the skill carries the meth
 novel tasks escalate to `STRONG_MODEL` (step 10). Steps 2 to 4 were recorded on Fireworks model
 IDs and steps 5 to 8 on the OpenRouter `AGENT_MODEL` default at recording time, `qwen/qwen3-32b`
 (the current default is `qwen/qwen3.6-27b`); the `SERVING MODEL` line always shows whatever
-`AGENT_MODEL` you configure. The run's full trace just landed in
-`runs/traces.jsonl`; that local store is what the miner reads in step 4.
+`AGENT_MODEL` you configure. The run's full trace just landed in Langfuse
+(`localhost:3100`); that's what the miner reads in step 4.
 
 ### 3. Write a first-draft skill and watch it under-deliver
 
@@ -130,8 +131,10 @@ docker compose run --rm optimize-mine tailwind
 ```
 
 The diagnosis is version drift: answers built on `tailwind.config.js` and `@tailwind` directives,
-the v3 world the stub teaches. The weakest mined tasks are surfaced as eval candidates for
-`optimize/tasks/<skill>.yaml`; see [Writing eval task sets](configuration.md#writing-eval-task-sets).
+the v3 world the stub teaches. The weakest mined tasks are surfaced as candidates only; mining does
+not edit the task set. Review them, add accepted tasks and explicit rubrics to
+`optimize/tasks/<skill>.yaml`, then keep train and holdout separate. See
+[Writing eval task sets](configuration.md#writing-eval-task-sets).
 
 Reference-free judging of live traffic is noisy. Treat mined dimensions as a diagnosis to
 investigate, not a verdict; the evidence gate runs on rubrics.
@@ -244,8 +247,8 @@ docker compose run --rm --entrypoint python optimize -m optimize.promote rollbac
 ```
 
 Rollback snapshots the revision it displaces too, so the round trip is symmetric, and it writes its
-own audit record. The trail records the actor as the approver's authenticated identity — the HTTP
-Basic username or OIDC email — or `local-operator` in the zero-config open mode, where it can record
+own audit record. The trail records the actor as the approver's authenticated identity, the HTTP
+Basic username or OIDC email, or `local-operator` in the zero-config open mode, where it can record
 that a local operator approved, not who. Both
 records are appended after the swap has already happened, so an audit write that fails (a full or
 read-only disk) is logged and the change stands: a missing line means the trail is incomplete, not
@@ -352,4 +355,3 @@ Two ways the library grows:
   or compose it rather than author a near-duplicate.
 
 ---
-

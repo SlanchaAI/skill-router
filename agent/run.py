@@ -4,7 +4,7 @@ task -> proposed skills -> loaded skills -> result.
 
 Env: API_KEY for the configured OpenAI-compatible endpoint (required unless MODEL_BASE_URL points
 at a local endpoint), AGENT_MODEL (legacy alias MODEL), MODEL_BASE_URL (optional local vLLM/Ollama
-OpenAI-compatible endpoint), STRONG_MODEL (serves novel no-skill tasks; defaults to GEPA_MODEL),
+OpenAI-compatible endpoint), STRONG_MODEL (serves novel no-skill tasks; defaults to SKILLOPT_MODEL),
 MCP_URL, LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL
 (optional tracing).
 """
@@ -21,7 +21,7 @@ MCP_URL = os.environ.get("MCP_URL", "http://mcp:8000/mcp")
 # endpoints get the hardcoded zero-data-retention provider preference; MODEL_BASE_URL points this
 # serving role at a local vLLM/Ollama server instead (README: Privacy).
 from optimize import (ZDR_PROVIDER, agent_model, api_key, client_kwargs, model_api_key,  # noqa: E402,F401
-                      model_base_url, teacher_base_url)
+                      model_base_url, skillopt_model, teacher_base_url)
 
 MODEL = agent_model()
 
@@ -29,7 +29,7 @@ MODEL = agent_model()
 def strong_model() -> str:
     """Serve a request when no skill matches. Defaults to the offline teacher (the model that
     authors candidate rewrites)."""
-    return os.environ.get("STRONG_MODEL") or os.environ.get("GEPA_MODEL", "z-ai/glm-5.2")
+    return os.environ.get("STRONG_MODEL") or skillopt_model()
 
 INSTRUCTIONS = """You are a deep agent. Skill selection has already been performed by the
 compatible router. Follow the loaded skill below when one is present. Never call suggestion or
@@ -253,7 +253,6 @@ async def _serve(task: str, routed: dict, tools) -> None:
     identity = _route_identity(routed)
     if identity:
         loaded = [identity]
-    _log_local_trace(task, final, tags)
 
     print(f"\nLOADED SKILLS (MCP route_and_load): {loaded or '(none)'}")
     print(f"TOKENS: {usage['input_tokens']} in / {usage['output_tokens']} out")
@@ -284,15 +283,6 @@ async def main(task: str):
         print("        MODEL_BASE_URL at a local vLLM/Ollama endpoint, no key needed).")
         return
     await _serve(task, routed, serving_tools)
-
-
-def _log_local_trace(task: str, answer: str, tags: list[str]) -> None:
-    """Append to the optional local JSONL store without letting trace failures break serving."""
-    from agent.traces import write
-    try:
-        write(task, answer, tags)
-    except (OSError, ValueError) as e:
-        print(f"[agent] local trace store unavailable ({e}), run not recorded locally")
 
 
 if __name__ == "__main__":

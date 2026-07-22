@@ -1,7 +1,15 @@
 """The optimizer CLIs preflight OPENROUTER_API_KEY and exit with setup help, not a mid-run 401."""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from optimize import require_openrouter_key
+
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_missing_key_exits_with_setup_help(monkeypatch, capsys):
@@ -137,7 +145,7 @@ def test_preflight_warns_on_every_uncovered_role(monkeypatch):
     monkeypatch.setattr(optimize, "provider_conflict",
                         lambda model, pins: None if "gemini" in model else f"nope for {model}")
     text = "\n".join(optimize.preflight_provider_pins())   # warns, never exits: roles fall back
-    assert "AGENT_MODEL=" in text and "GEPA_MODEL=" in text and "JUDGE_MODEL" not in text
+    assert "AGENT_MODEL=" in text and "SKILLOPT_MODEL=" in text and "JUDGE_MODEL" not in text
 
 
 def test_preflight_reports_agent_model_alias_value(monkeypatch):
@@ -164,6 +172,41 @@ def test_agent_model_resolution(monkeypatch):
     assert agent_model() == "new/model"
 
 
+def test_skillopt_model_resolution(monkeypatch):
+    from optimize import skillopt_model
+    monkeypatch.delenv("SKILLOPT_MODEL", raising=False)
+    assert skillopt_model() == "z-ai/glm-5.2"
+    monkeypatch.setenv("SKILLOPT_MODEL", "author/model")
+    assert skillopt_model() == "author/model"
+    monkeypatch.setenv("SKILLOPT_MODEL", "")
+    assert skillopt_model() == "z-ai/glm-5.2"
+
+
+def test_skillopt_model_reaches_every_authoring_role():
+    env = {**os.environ, "SKILLOPT_MODEL": "author/model",
+           "JUDGE_MODEL": "different/judge"}
+    code = """
+import optimize.draft as draft
+import optimize.rollout as rollout
+from optimize.usage import _role_models
+assert draft.MODEL == 'author/model'
+assert rollout.SKILLOPT_MODEL == 'author/model'
+assert _role_models()['reflection'] == 'author/model'
+"""
+    subprocess.run([sys.executable, "-c", code], env=env, cwd=ROOT,
+                   text=True, capture_output=True, check=True)
+
+
+def test_judge_warns_when_skillopt_model_is_the_grader():
+    env = {**os.environ, "SKILLOPT_MODEL": "same/model", "JUDGE_MODEL": "same/model"}
+    env.pop("JUDGE_MODELS", None)
+
+    result = subprocess.run([sys.executable, "-c", "import optimize.judge"], env=env,
+                            cwd=ROOT, text=True, capture_output=True, check=True)
+
+    assert "author == grader" in result.stdout
+
+
 def test_preflight_checks_strong_model_only_when_explicitly_set(monkeypatch):
     import optimize
     monkeypatch.setenv("OPENROUTER_PROVIDERS", "fireworks")
@@ -173,7 +216,7 @@ def test_preflight_checks_strong_model_only_when_explicitly_set(monkeypatch):
                         lambda model, pins: f"nope for {model}")
     monkeypatch.delenv("STRONG_MODEL", raising=False)
     text = "\n".join(optimize.preflight_provider_pins())
-    assert "STRONG_MODEL" not in text               # default = GEPA_MODEL, already checked
+    assert "STRONG_MODEL" not in text               # default = SKILLOPT_MODEL, already checked
     monkeypatch.setenv("STRONG_MODEL", "z-ai/glm-5.2-max")
     assert any("STRONG_MODEL=z-ai/glm-5.2-max" in w for w in optimize.preflight_provider_pins())
 

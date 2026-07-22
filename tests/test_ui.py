@@ -295,12 +295,14 @@ def test_pending_exposes_model_and_judge_for_the_comparison_panel(client):
 
 
 def test_comparison_panel_controls_are_in_the_page(client):
-    """The two-step approve panel (Approve -> comparison -> final Approve -> Confirm) must ship in
-    the served page, with the confirm button nested inside the modal overlay."""
-    layout = _Layout(client.get("/").text)
-    for element_id in ("cmp-overlay", "cmp-body", "cmp-approve", "cmp-confirm", "cmp-cancel"):
+    """The review action opens evidence, then the modal's primary button makes the decision."""
+    html = client.get("/").text
+    layout = _Layout(html)
+    for element_id in ("cmp-overlay", "cmp-body", "cmp-approve", "cmp-cancel"):
         assert element_id in layout.ancestors, f"comparison panel missing #{element_id}"
-    assert "cmp-overlay" in layout.ancestors["cmp-confirm"]
+    assert "cmp-overlay" in layout.ancestors["cmp-approve"]
+    assert "cmp-confirm" not in layout.ancestors
+    assert '$("#cmp-approve").onclick = () => act("#cmp-msg"' in html
 
 
 def test_review_panel_ships_risk_side_diff_and_confirmed_rejection(client):
@@ -328,6 +330,8 @@ def test_skill_list_ships_search_filters_version_explorer_and_live_updates(clien
     assert "signature !== boardSignature" in html
     assert "skillInventory.filter" in html
     assert "/api/skills/${encodeURIComponent(skill)}/versions" in html
+    assert "versionCount" in html and "active, pending, and snapshotted versions" in html
+    assert "renderSkills(skills, runs || runInventory, hist)" in html
 
 
 def test_comparison_panel_orders_tokens_and_tables_numbered_task_scores(client):
@@ -444,9 +448,19 @@ def test_index_leads_with_review_before_candidate_generation(client):
     html = client.get("/").text
     assert html.index('id="review-section"') < html.index('id="history-section"')
     assert html.index('id="history-section"') < html.index('id="skills"')
-    assert html.index('id="skills"') < html.index('id="run-section"')
+    assert 'id="run-section"' not in html
     assert "Evidence-gated change control" in html
     assert "change control" in html and "skill optimizer" not in html
+
+
+def test_index_nests_each_skillopt_log_under_its_skill(client):
+    html = client.get("/").text
+    assert "runInventory[s.name]" in html
+    assert 'class="skill-run-log"' in html
+    assert 'role="log"' in html and 'aria-live="polite"' in html
+    assert "renderSkills(skills, runs || runInventory, hist)" in html
+    assert "Optimization can take a few minutes" in html
+    assert 'id="log"' not in html
 
 
 def test_carn_viewer_is_gone(client):
@@ -851,7 +865,8 @@ def test_index_follows_the_queue_when_the_reviewed_card_is_gone(client):
     assert "if (!quarantined.length) { showNoPending(); return; }" in html
     # a card opened by hand still clears the previous result
     assert "if (!keepMessage) say(\"#pending-msg\", \"\", false);" in html
-    assert 'onclick="showPending(\'${esc(s.name)}\')"' in html
+    assert 'onclick="showPending(\'${esc(s.name)}\', {scroll: true})"' in html
+    assert 'if (scroll) {' in html and '$("#review-section").scrollIntoView' in html
 
 
 def test_index_renders_the_board_when_history_is_unavailable(client):

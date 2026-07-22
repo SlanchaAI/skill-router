@@ -16,11 +16,15 @@ docker compose up --build
 
 This brings up the MCP server (`localhost:8000`), the change-control UI (`localhost:8080`), and a
 self-hosted Langfuse for traces and experiments (`localhost:3100`), then runs the agent once on a
-demo task. (First boot pulls the Langfuse stack, so give it a minute.) The UI lists every skill the router serves, each with its
-content-hash revision and a load count (how often it has actually been served), and surfaces
-anything awaiting review:
+demo task. (First boot pulls the Langfuse stack, so give it a minute.) The UI lists every skill the
+router serves, each with its content-hash revision and a load count (how often it has actually been
+served), and surfaces anything awaiting review.
 
-![Change-control UI, the skills library, with revisions and load counts](ui-home.webp)
+Click a skill's name or description to open its read-only detail view. Use **Version** to switch
+among the active revision, a pending challenger, and available rollback snapshots. Use **File** to
+inspect `SKILL.md` or any bundled resource in that version. This is an explorer only: selecting a
+version there does not promote, restore, or otherwise change what the router serves. The version
+count in each skill row includes the active revision, pending challenger, and rollback snapshots.
 
 No skills are committed to this repo. `fetch_skills.sh` clones each source, copies its skills in,
 and deletes the clone, so everything stays under its own upstream license. Without an API key
@@ -160,7 +164,12 @@ docker compose run --rm optimize tailwind
 
 SkillOpt reflects on failing minibatches, proposes bounded edits, keeps only train-set
 improvements, and A/Bs its best revision against the champion through the full agent on held-out
-tasks (about two minutes, a few cents). The UI's **Optimize with SkillOpt** button starts the same run.
+tasks (about two minutes, a few cents). The UI's **Optimize with SkillOpt** button starts the same
+run. After the click, the UI warns that optimization can take a few minutes and shows the live log
+directly beneath the selected skill. The button stays disabled until the run finishes.
+
+![SkillOpt optimization progress shown directly beneath the tailwind skill](ui-home.webp)
+
 Our run:
 
 ```
@@ -234,12 +243,12 @@ SkillOpt removed and the green lines are the v4 body it wrote:
 
 ![Review card, the tailwind v3→v4 challenger, promotable with warnings](ui-review.webp)
 
-**Approve** doesn't promote in one click: it opens a comparison panel with the real serving and
-judge model names, input tokens above output tokens, and a numbered before/after table for every
-held-out task. A final **Approve & promote** reveals a separate **Confirm**, so a promotion is
-deliberate.
+**Approve & promote** on the review card opens a comparison panel with the real serving and judge
+model names, input tokens above output tokens, and a numbered before/after table for every held-out
+task. **Approve & promote** in that panel is the final decision. There is no third confirmation
+button.
 
-![Comparison panel, model, tokens, and judge scores before Confirm](ui-compare.webp)
+![Comparison panel with models, numbered task scores, and input-first token usage](ui-compare.webp)
 
 **Approve & promote** verifies the evidence still matches the on-disk champion, snapshots the prior
 revision into `runs/revisions/tailwind/<revision>/`, swaps the challenger into `skills/tailwind/` by

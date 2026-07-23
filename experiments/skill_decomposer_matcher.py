@@ -279,7 +279,7 @@ def _one_cluster_lines(index: int, cluster: Cluster, root: Path) -> list[str]:
 
 def _section_line(section: Section, root: Path) -> str:
     relative = _relative_source(section.source, root)
-    snippet = " ".join(section.body.split())[:240]
+    snippet = " ".join(section.body.split())[:240].rstrip()
     return f"- **{section.skill}: {section.heading}** (`{relative}:{section.line}`): {snippet}"
 
 

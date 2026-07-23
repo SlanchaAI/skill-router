@@ -3,6 +3,8 @@ from pathlib import Path
 import numpy as np
 
 from experiments.skill_decomposer_matcher import (
+    Analysis,
+    Cluster,
     Section,
     Match,
     MatchConfig,
@@ -141,3 +143,12 @@ Inspect the proposed change, run focused checks, and record the evidence before 
     assert len(analysis.clusters) == 1
     assert "3 skills, 3 sections" in report
     assert "alpha: Review and verify" in report
+
+
+def test_render_markdown_does_not_emit_trailing_whitespace():
+    section = Section("alpha", "Workflow", "word " * 100, Path("alpha/SKILL.md"), 1)
+    analysis = Analysis(1, (section,), (), (Cluster((section,), 1.0),))
+
+    report = render_markdown(analysis, Path("."), top_matches=5)
+
+    assert all(line == line.rstrip() for line in report.splitlines())

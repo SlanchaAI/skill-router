@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
+from heapq import nsmallest
 from itertools import combinations
 from pathlib import Path
 
@@ -46,6 +48,7 @@ class MatchConfig:
     neighbors: int = 3
     min_score: float = 0.78
     min_skills: int = 3
+    max_clusters: int = 100
 
 
 def _without_frontmatter(lines: list[str]) -> tuple[list[str], int]:
@@ -58,6 +61,8 @@ def _without_frontmatter(lines: list[str]) -> tuple[list[str], int]:
 
 
 def _heading(line: str) -> tuple[int, str] | None:
+    if line.startswith("\t") or len(line) - len(line.lstrip(" ")) > 3:
+        return None
     stripped = line.lstrip()
     hashes = len(stripped) - len(stripped.lstrip("#"))
     if not 1 <= hashes <= 6:
@@ -70,44 +75,85 @@ def _heading(line: str) -> tuple[int, str] | None:
     return (hashes, title) if title else None
 
 
-def decompose_skill(source: Path, min_chars: int = 80) -> list[Section]:
-    raw_lines = source.read_text(encoding="utf-8", errors="ignore").splitlines()
+def _fence_marker(line: str) -> tuple[str, int, str] | None:
+    stripped = line.lstrip(" ")
+    if stripped.startswith("\t") or len(line) - len(stripped) > 3:
+        return None
+    if not stripped or stripped[0] not in ("`", "~"):
+        return None
+    marker = stripped[0]
+    width = len(stripped) - len(stripped.lstrip(marker))
+    return (marker, width, stripped[width:]) if width >= 3 else None
+
+
+class _SectionParser:
+    def __init__(self, first_line: int):
+        self.first_line = first_line
+        self.heading_path: list[str] = []
+        self.active_heading = ""
+        self.active_line = first_line
+        self.body: list[str] = []
+        self.fence: tuple[str, int] | None = None
+        self.chunks: list[tuple[str, int, str]] = []
+
+    def parse(self, lines: list[str]) -> list[tuple[str, int, str]]:
+        for offset, line in enumerate(lines):
+            self._consume(offset, line)
+        self._flush()
+        return self.chunks
+
+    def _consume(self, offset: int, line: str) -> None:
+        marker = _fence_marker(line)
+        if self.fence:
+            self._consume_fenced(line, marker)
+        elif marker:
+            self.fence = marker[:2]
+            self.body.append(line)
+        else:
+            self._consume_markdown(offset, line)
+
+    def _consume_fenced(self, line: str, marker: tuple[str, int, str] | None) -> None:
+        self.body.append(line)
+        if marker and self._closes_fence(marker):
+            self.fence = None
+
+    def _closes_fence(self, marker: tuple[str, int, str]) -> bool:
+        assert self.fence is not None
+        same_marker = marker[0] == self.fence[0]
+        wide_enough = marker[1] >= self.fence[1]
+        return same_marker and wide_enough and not marker[2].strip()
+
+    def _consume_markdown(self, offset: int, line: str) -> None:
+        parsed = _heading(line)
+        if parsed:
+            self._start_section(offset, *parsed)
+        else:
+            self.body.append(line)
+
+    def _start_section(self, offset: int, level: int, title: str) -> None:
+        self._flush()
+        self.heading_path[level - 1 :] = []
+        self.heading_path.extend(["(untitled)"] * (level - 1 - len(self.heading_path)))
+        self.heading_path.append(title)
+        self.active_heading = " > ".join(self.heading_path)
+        self.active_line = self.first_line + offset
+        self.body = []
+
+    def _flush(self) -> None:
+        text = "\n".join(self.body).strip()
+        if self.active_heading:
+            self.chunks.append((self.active_heading, self.active_line, text))
+
+
+def decompose_skill(source: Path, min_chars: int = 120) -> list[Section]:
+    raw_lines = source.read_text(encoding="utf-8").splitlines()
     lines, first_line = _without_frontmatter(raw_lines)
-    skill = source.parent.name
-    sections: list[Section] = []
-    heading_path: list[str] = []
-    active_heading = ""
-    active_line = first_line
-    body: list[str] = []
-    fence: str | None = None
-
-    def flush() -> None:
-        text = "\n".join(body).strip()
-        if active_heading and len(text) >= min_chars:
-            sections.append(Section(skill, active_heading, text, source, active_line))
-
-    for offset, line in enumerate(lines):
-        stripped = line.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            marker = stripped[:3]
-            fence = None if fence == marker else marker if fence is None else fence
-            body.append(line)
-            continue
-        parsed = None if fence else _heading(line)
-        if not parsed:
-            body.append(line)
-            continue
-        flush()
-        level, title = parsed
-        heading_path[level - 1 :] = []
-        while len(heading_path) < level - 1:
-            heading_path.append("(untitled)")
-        heading_path.append(title)
-        active_heading = " > ".join(heading_path)
-        active_line = first_line + offset
-        body = []
-    flush()
-    return sections
+    chunks = _SectionParser(first_line).parse(lines)
+    return [
+        Section(source.parent.name, heading, body, source, line)
+        for heading, line, body in chunks
+        if len(body) >= min_chars
+    ]
 
 
 def match_sections(
@@ -117,28 +163,45 @@ def match_sections(
     neighbors: int,
     min_score: float,
 ) -> list[Match]:
+    matches = threshold_matches(sections, vectors, min_score=min_score)
+    selected = {
+        match
+        for section in sections
+        for match in _section_matches(section, matches)[:neighbors]
+    }
+    return sorted(selected, key=_match_sort_key)
+
+
+def threshold_matches(
+    sections: list[Section],
+    vectors: np.ndarray,
+    *,
+    min_score: float,
+) -> list[Match]:
     if len(sections) != len(vectors):
         raise ValueError("one vector is required for every section")
     if not sections:
         return []
-    matrix = np.asarray(vectors, dtype=np.float32)
+    matrix = np.array(vectors, dtype=np.float32, copy=True)
     matrix /= np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-8
     scores = matrix @ matrix.T
-    pairs: dict[tuple[int, int], Match] = {}
-    for left_index, left in enumerate(sections):
-        candidates = [
-            (float(scores[left_index, right_index]), right_index)
-            for right_index, right in enumerate(sections)
-            if right.skill != left.skill and scores[left_index, right_index] >= min_score
-        ]
-        for score, right_index in sorted(candidates, key=lambda item: (-item[0], item[1]))[:neighbors]:
-            pair = tuple(sorted((left_index, right_index)))
-            pairs[pair] = Match(sections[pair[0]], sections[pair[1]], round(score, 6))
-    return sorted(
-        pairs.values(),
-        key=lambda match: (-match.score, match.left.skill, match.left.heading,
-                           match.right.skill, match.right.heading),
-    )
+    matches = [
+        Match(sections[left], sections[right], round(float(scores[left, right]), 6))
+        for left, right in combinations(range(len(sections)), 2)
+        if sections[left].skill != sections[right].skill
+        and scores[left, right] >= min_score
+    ]
+    return sorted(matches, key=_match_sort_key)
+
+
+def _section_matches(section: Section, matches: list[Match]) -> list[Match]:
+    incident = [match for match in matches if section in (match.left, match.right)]
+    return sorted(incident, key=_match_sort_key)
+
+
+def _match_sort_key(match: Match) -> tuple:
+    return (-match.score, match.left.skill, match.left.heading,
+            match.right.skill, match.right.heading)
 
 
 def build_clusters(
@@ -146,15 +209,18 @@ def build_clusters(
     matches: list[Match],
     *,
     min_skills: int,
+    max_clusters: int = 100,
 ) -> list[Cluster]:
+    if min_skills != 3:
+        raise ValueError("candidate search requires exactly three skills")
+    if max_clusters < 1:
+        raise ValueError("max_clusters must be positive")
     neighbors, score_by_edge = _match_graph(sections, matches)
-    cliques = _maximal_cliques(neighbors, min_skills)
-    clusters = [_cluster(clique, sections, score_by_edge) for clique in cliques]
-    return sorted(
-        clusters,
-        key=lambda cluster: (-len(cluster.sections), -cluster.mean_score,
-                             cluster.sections[0].skill),
+    clusters = (
+        _cluster(triangle, sections, score_by_edge)
+        for triangle in _triangles(neighbors)
     )
+    return nsmallest(max_clusters, clusters, key=_cluster_sort_key)
 
 
 def _match_graph(
@@ -173,36 +239,37 @@ def _match_graph(
     return neighbors, score_by_edge
 
 
-def _maximal_cliques(neighbors: dict[int, set[int]], min_size: int) -> list[set[int]]:
-    cliques: list[set[int]] = []
+def _triangles(neighbors: dict[int, set[int]]) -> Iterator[set[int]]:
+    for left, right in _forward_edges(neighbors):
+        for third in _common_successors(neighbors, left, right):
+            yield {left, right, third}
 
-    def visit(chosen: set[int], candidates: set[int], excluded: set[int]) -> None:
-        if not candidates and not excluded:
-            if len(chosen) >= min_size:
-                cliques.append(set(chosen))
-            return
-        pool = candidates | excluded
-        pivot = max(pool, key=lambda node: len(candidates & neighbors[node])) if pool else None
-        expandable = candidates - (neighbors[pivot] if pivot is not None else set())
-        for node in sorted(expandable):
-            visit(
-                chosen | {node},
-                candidates & neighbors[node],
-                excluded & neighbors[node],
-            )
-            candidates.remove(node)
-            excluded.add(node)
 
-    visit(set(), set(neighbors), set())
-    return cliques
+def _forward_edges(neighbors: dict[int, set[int]]) -> Iterator[tuple[int, int]]:
+    for left in sorted(neighbors):
+        for right in sorted(node for node in neighbors[left] if node > left):
+            yield left, right
+
+
+def _common_successors(
+    neighbors: dict[int, set[int]],
+    left: int,
+    right: int,
+) -> list[int]:
+    return sorted(node for node in neighbors[left] & neighbors[right] if node > right)
+
+
+def _cluster_sort_key(cluster: Cluster) -> tuple:
+    identities = tuple((section.skill, section.heading) for section in cluster.sections)
+    return -cluster.mean_score, identities
 
 
 def _cluster(
-    clique: set[int],
+    triangle: set[int],
     sections: list[Section],
     score_by_edge: dict[tuple[int, int], float],
 ) -> Cluster:
-    ordered_indices = sorted(clique)
+    ordered_indices = sorted(triangle)
     edge_scores = [score_by_edge[pair] for pair in combinations(ordered_indices, 2)]
     selected = (sections[index] for index in ordered_indices)
     ordered = tuple(sorted(selected, key=lambda section: (section.skill, section.heading)))
@@ -232,13 +299,23 @@ def analyze_corpus(
         return Analysis(len(sources), (), (), ())
     texts = [f"{section.heading}\n\n{section.body}" for section in sections]
     vectors = np.asarray(list(embedder.embed(texts)), dtype=np.float32)
+    all_matches = threshold_matches(
+        sections,
+        vectors,
+        min_score=config.min_score,
+    )
     matches = match_sections(
         sections,
         vectors,
         neighbors=config.neighbors,
         min_score=config.min_score,
     )
-    clusters = build_clusters(sections, matches, min_skills=config.min_skills)
+    clusters = build_clusters(
+        sections,
+        all_matches,
+        min_skills=config.min_skills,
+        max_clusters=config.max_clusters,
+    )
     return Analysis(len(sources), tuple(sections), tuple(matches), tuple(clusters))
 
 
@@ -251,8 +328,8 @@ def render_markdown(analysis: Analysis, root: Path, *, top_matches: int) -> str:
         (f"Parsed {analysis.skill_count} skills, {len(analysis.sections)} sections, "
          f"{len(analysis.matches)} cross-skill matches, and {len(analysis.clusters)} clusters."),
         "",
-        "Candidate clusters require sections from at least the configured number of distinct skills. "
-        "They are retrieval leads, not proof that a shared workflow exists.",
+        "Candidate clusters are bounded three-skill similarity triangles. They are retrieval leads, "
+        "not proof that a shared workflow exists.",
         "",
         "## Candidate clusters",
     ]
@@ -332,6 +409,13 @@ def analysis_record(analysis: Analysis, root: Path) -> dict:
     }
 
 
+def _positive_int(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="skill-library root to scan recursively")
@@ -340,7 +424,8 @@ def main() -> None:
     parser.add_argument("--min-chars", type=int, default=120)
     parser.add_argument("--neighbors", type=int, default=3)
     parser.add_argument("--min-score", type=float, default=0.78)
-    parser.add_argument("--min-skills", type=int, default=3)
+    parser.add_argument("--min-skills", type=int, choices=(3,), default=3)
+    parser.add_argument("--max-clusters", type=_positive_int, default=100)
     parser.add_argument("--top-matches", type=int, default=50)
     args = parser.parse_args()
 
@@ -355,6 +440,7 @@ def main() -> None:
             neighbors=args.neighbors,
             min_score=args.min_score,
             min_skills=args.min_skills,
+            max_clusters=args.max_clusters,
         ),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

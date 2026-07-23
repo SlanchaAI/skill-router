@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from experiments.skill_decomposer_matcher import (
     Analysis,
@@ -13,6 +14,7 @@ from experiments.skill_decomposer_matcher import (
     decompose_skill,
     match_sections,
     render_markdown,
+    threshold_matches,
 )
 
 
@@ -33,9 +35,15 @@ Opening text that is long enough to retain as a section for this test.
 
 Run the focused test, inspect the result, and stop when the evidence is clean.
 
-```markdown
+````markdown
 # This is code, not a section
 ```
+# This is still code because the outer fence uses four backticks
+````
+
+    # This is indented code, not a section
+    ```
+   \t~~~
 
 ### Failure path
 
@@ -52,6 +60,19 @@ Record the failing command and diagnose the cause before another attempt.
         "Example > Verify > Failure path",
     ]
     assert "This is code, not a section" in sections[1].body
+    assert "This is still code" in sections[1].body
+    assert "This is indented code" in sections[1].body
+    assert "```" in sections[1].body
+    assert "~~~" in sections[1].body
+
+
+def test_decompose_skill_rejects_invalid_utf8(tmp_path: Path):
+    source = tmp_path / "invalid" / "SKILL.md"
+    source.parent.mkdir()
+    source.write_bytes(b"# Invalid\n\xff")
+
+    with pytest.raises(UnicodeDecodeError):
+        decompose_skill(source)
 
 
 def test_match_sections_returns_only_cross_skill_neighbors():
@@ -107,6 +128,49 @@ def test_build_clusters_rejects_similarity_chains_without_all_pair_matches():
     clusters = build_clusters([alpha, beta, gamma], matches, min_skills=3)
 
     assert clusters == []
+
+
+def test_build_clusters_returns_bounded_three_skill_evidence_not_maximal_cliques():
+    sections = [
+        Section(str(index), "Workflow", str(index), Path(str(index)) / "SKILL.md", 1)
+        for index in range(5)
+    ]
+    matches = [
+        Match(sections[left], sections[right], 0.9)
+        for left in range(len(sections))
+        for right in range(left + 1, len(sections))
+    ]
+
+    clusters = build_clusters(sections, matches, min_skills=3)
+
+    assert len(clusters) == 10
+    assert all(len(cluster.sections) == 3 for cluster in clusters)
+    assert len(build_clusters(sections, matches, min_skills=3, max_clusters=4)) == 4
+    with pytest.raises(ValueError, match="max_clusters"):
+        build_clusters(sections, matches, min_skills=3, max_clusters=0)
+
+
+def test_triangle_search_uses_all_threshold_edges_not_only_display_neighbors():
+    skills = ("alpha", "beta", "gamma", "alpha-decoy", "beta-decoy", "gamma-decoy")
+    sections = [Section(skill, "Workflow", skill, Path(skill) / "SKILL.md", 1) for skill in skills]
+    vectors = np.array([
+        [1.0, 0.0, 0.0],
+        [0.8, 0.6, 0.0],
+        [0.8, 0.0, 0.6],
+        [1.0, 0.0, 0.0],
+        [0.8, 0.6, 0.0],
+        [0.8, 0.0, 0.6],
+    ])
+
+    display_matches = match_sections(sections, vectors, neighbors=1, min_score=0.6)
+    all_matches = threshold_matches(sections, vectors, min_score=0.6)
+    clusters = build_clusters(sections, all_matches, min_skills=3)
+
+    target_skills = {"alpha", "beta", "gamma"}
+    assert not any({match.left.skill, match.right.skill} <= target_skills
+                   for match in display_matches)
+    assert any(target_skills <= {section.skill for section in cluster.sections}
+               for cluster in clusters)
 
 
 class _SameVectorEmbedder:

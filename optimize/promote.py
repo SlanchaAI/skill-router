@@ -199,9 +199,39 @@ def _validate_evidence(current, components: dict[str, str], evidence: dict) -> N
     if gate.get("promotable") is not True:
         reasons = "; ".join(gate.get("blocked", [])) or "unspecified failure"
         raise ValueError(f"evidence gate blocked promotion: {reasons}")
+    _validate_execution_evidence(evidence.get("execution"))
     problem = _revision_problem(current, components, evidence)
     if problem:
         raise ValueError(problem)
+
+
+def _valid_digest(value) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and set(value) <= set("0123456789abcdef"))
+
+
+def _validate_execution_evidence(execution) -> None:
+    """Fail closed when a pending change claims CARN replay verification."""
+    if execution is None:
+        return
+    if not isinstance(execution, dict) or set(execution) != {
+        "schema_version", "expected_bundle_digest", "report",
+    }:
+        raise ValueError("invalid CARN execution evidence")
+    if execution["schema_version"] != "carn/replay-verification/v1":
+        raise ValueError("unsupported CARN execution evidence")
+    expected = execution["expected_bundle_digest"]
+    report = execution["report"]
+    if not _valid_digest(expected) or not isinstance(report, dict):
+        raise ValueError("invalid CARN execution evidence")
+    if set(report) != {"ok", "reason", "bundle_digest", "result", "divergence"}:
+        raise ValueError("invalid CARN verification report")
+    if report.get("ok") is not True or report.get("reason") != "verified":
+        raise ValueError("CARN replay verification failed")
+    if report.get("bundle_digest") != expected:
+        raise ValueError("CARN bundle digest does not match anchored evidence")
+    if report.get("divergence") is not None or not isinstance(report.get("result"), dict):
+        raise ValueError("invalid CARN verification report")
 
 
 def stale_evidence_reason(skill: str, pending: dict) -> str | None:

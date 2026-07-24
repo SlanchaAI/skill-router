@@ -118,3 +118,16 @@ metered API member and this task had no API-spend opt-in. Three read-only
 research agents supplied independent routing, replay, and cache critiques
 instead. Per the white-space method, the commercial verdict remains REVISE
 until buyer and aggregation-rights validation passes.
+
+## CARN execution-evidence seam
+
+Ingot evidence can now carry a caller-anchored CARN replay-verification report.
+The server-side promotion path validates the schema, exact report shape,
+successful verdict, absence of divergence, and bundle-digest equality. Invalid
+attached execution evidence blocks promotion; omission preserves current
+behavior until a deployment wires CARN recording into its evaluation harness.
+
+- `optimize.evidence.build_carn_execution_evidence` builds the portable section.
+- `optimize.promote._validate_execution_evidence` is the live promotion caller.
+- `tests/test_evidence.py` and `tests/test_promote.py` cover rendering, acceptance,
+  and digest-mismatch refusal.

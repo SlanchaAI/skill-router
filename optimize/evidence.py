@@ -8,7 +8,17 @@ from pathlib import Path
 
 SCHEMA = "skill-router/evidence/v1"
 ROUTING_SCHEMA = "skill-router/evidence/routing/v1"
+CARN_EXECUTION_SCHEMA = "carn/replay-verification/v1"
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def build_carn_execution_evidence(report: dict, expected_digest: str) -> dict:
+    """Bind a CARN verification report to the digest trusted by its caller."""
+    return {
+        "schema_version": CARN_EXECUTION_SCHEMA,
+        "expected_bundle_digest": expected_digest,
+        "report": report,
+    }
 
 
 def recorded_path(path: Path) -> str:
@@ -46,7 +56,7 @@ def build_evidence(summary: dict, champion_revision: str, challenger_revision: s
             "score_delta": round(chall_score - champ_score, 6),
             "first_divergence": first_divergence(left, right),
         })
-    return {
+    evidence = {
         "schema_version": SCHEMA,
         "skill": summary["skill"],
         "created": summary["created"],
@@ -63,6 +73,9 @@ def build_evidence(summary: dict, champion_revision: str, challenger_revision: s
         "cases": cases,
         "gate": summary["gate"],
     }
+    if summary.get("execution") is not None:
+        evidence["execution"] = summary["execution"]
+    return evidence
 
 
 def render_markdown(evidence: dict) -> str:
@@ -73,6 +86,14 @@ def render_markdown(evidence: dict) -> str:
     warnings = "; ".join(gate.get("warnings", [])) or "none"
     output_before = champion["tokens"].get("mean_output", 0)
     output_after = challenger["tokens"].get("mean_output", 0)
+    execution = evidence.get("execution") or {}
+    execution_report = execution.get("report") or {}
+    execution_line = (
+        f"- CARN replay: {execution_report.get('reason', 'unverified')} "
+        f"(`{execution_report.get('bundle_digest', 'missing')}`)"
+        if execution
+        else "- CARN replay: not supplied"
+    )
     lines = [
         f"# Behavioral Skill CI: {evidence['skill']}",
         "",
@@ -89,6 +110,7 @@ def render_markdown(evidence: dict) -> str:
         f"- Changed components: {', '.join(evidence['changed_components']) or 'none'}",
         f"- Blocking reasons: {blocked}",
         f"- Warnings: {warnings}",
+        execution_line,
         "",
         "## Cases",
         "",

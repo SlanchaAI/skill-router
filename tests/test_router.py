@@ -166,3 +166,105 @@ def test_conflicting_skills_do_not_both_appear_in_ranked_result():
     result = Router([one, two]).route("same routing text", "codex", "/tmp", min_score=0.0)
     ranked = [result["match"], *[item["name"] for item in result["alternatives"]]]
     assert not ({"one", "two"} <= set(ranked))
+
+
+class _BodyAwareEmbedding:
+    """Deterministic vectors: descriptions/billing point east, Kubernetes content/query north."""
+
+    def __init__(self):
+        self.document_calls = []
+
+    @staticmethod
+    def _vector(text):
+        import numpy as np
+        if "CrashLoopBackOff" in text or "kubernetes pod" in text.lower():
+            return np.array([0.0, 1.0], dtype=np.float32)
+        return np.array([1.0, 0.0], dtype=np.float32)
+
+    def embed(self, texts):
+        values = list(texts)
+        self.document_calls.append(values)
+        return iter(self._vector(text) for text in values)
+
+    def embed_query(self, texts):
+        return iter(self._vector(text) for text in texts)
+
+
+def test_body_aware_route_breaks_an_ambiguous_description_tie(monkeypatch):
+    import mcp_server.router as router_mod
+    embedder = _BodyAwareEmbedding()
+    monkeypatch.setattr(router_mod, "build_embedding", lambda: embedder)
+    router_mod.Router._vector_cache.clear()
+    router = router_mod.Router([
+        _skill("billing-runbook", "Operate a production service."),
+        Skill(**{**_skill("kubernetes-runbook", "Operate a production service.").__dict__,
+                 "body": "Diagnose a kubernetes pod in CrashLoopBackOff."}),
+    ])
+
+    result = router.route("diagnose a kubernetes pod", "codex", "/tmp", min_score=0.0)
+
+    assert result["match"] == "kubernetes-runbook"
+    assert result["matched_on"] == "content"
+    assert result["score_components"]["content"] > result["score_components"]["description"]
+    assert all("skill_body" not in item for item in result["alternatives"])
+
+
+def test_body_aware_route_filters_incompatible_content_before_ranking(monkeypatch):
+    import mcp_server.router as router_mod
+    monkeypatch.setattr(router_mod, "build_embedding", _BodyAwareEmbedding)
+    router_mod.Router._vector_cache.clear()
+    blocked = Skill(**{
+        **_skill("kubernetes-runbook", "Operate a production service.",
+                 required_tools=["kubectl"]).__dict__,
+        "body": "Diagnose a kubernetes pod in CrashLoopBackOff.",
+    })
+    router = router_mod.Router([
+        _skill("billing-runbook", "Operate a production service."),
+        blocked,
+    ])
+
+    result = router.route("diagnose a kubernetes pod", "codex", "/tmp",
+                          available_tools=[], min_score=0.0)
+
+    assert result["match"] == "billing-runbook"
+
+
+def test_variant_content_is_ranked_for_the_requested_harness(monkeypatch):
+    import mcp_server.router as router_mod
+    monkeypatch.setattr(router_mod, "build_embedding", _BodyAwareEmbedding)
+    router_mod.Router._vector_cache.clear()
+    alpha = Skill(**{
+        **_skill("alpha", "Operate a production service.").__dict__,
+        "body": "Investigate invoice charges.",
+        "variants": {"codex": "Diagnose a kubernetes pod in CrashLoopBackOff."},
+    })
+    beta = Skill(**{
+        **_skill("beta", "Operate a production service.").__dict__,
+        "body": "Diagnose a kubernetes pod in CrashLoopBackOff.",
+        "variants": {"codex": "Investigate invoice charges."},
+    })
+    router = router_mod.Router([alpha, beta])
+
+    assert router.route("diagnose a kubernetes pod", "codex", "/tmp",
+                        min_score=0.0)["match"] == "alpha"
+    assert router.route("diagnose a kubernetes pod", "claude", "/tmp",
+                        min_score=0.0)["match"] == "beta"
+
+
+def test_body_change_reuses_description_vector_and_reembeds_content(monkeypatch):
+    import mcp_server.router as router_mod
+    embedder = _BodyAwareEmbedding()
+    monkeypatch.setattr(router_mod, "build_embedding", lambda: embedder)
+    router_mod.Router._vector_cache.clear()
+    first = _skill("runbook", "Operate a production service.")
+    second = Skill(**{**first.__dict__, "body": "Diagnose a CrashLoopBackOff."})
+
+    router_mod.Router([first]).route("diagnose a kubernetes pod", "codex", "/tmp",
+                                     min_score=0.0)
+    router_mod.Router([second]).route("diagnose a kubernetes pod", "codex", "/tmp",
+                                      min_score=0.0)
+
+    assert embedder.document_calls[0] == [first.description]
+    assert len(embedder.document_calls) == 3
+    assert "Instructions:" in embedder.document_calls[1][0]
+    assert "CrashLoopBackOff" in embedder.document_calls[2][0]

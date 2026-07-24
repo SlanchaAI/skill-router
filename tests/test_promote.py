@@ -44,48 +44,6 @@ def test_promote_refuses_blocked_evidence(tmp_path, monkeypatch):
     assert "old body" in (skill / "SKILL.md").read_text()
 
 
-def test_promote_refuses_invalid_carn_execution_evidence(tmp_path, monkeypatch):
-    skill = _library(tmp_path, monkeypatch)
-    pending = _pending(skill)
-    pending["evidence"]["execution"] = {
-        "schema_version": "carn/replay-verification/v1",
-        "expected_bundle_digest": "a" * 64,
-        "report": {
-            "ok": True,
-            "reason": "verified",
-            "bundle_digest": "b" * 64,
-            "result": {},
-            "divergence": None,
-        },
-    }
-    P.save_pending("pdf", pending)
-
-    with pytest.raises(ValueError, match="CARN bundle digest"):
-        P.approve_pending("pdf")
-    assert "old body" in (skill / "SKILL.md").read_text()
-
-
-def test_promote_accepts_anchored_carn_execution_evidence(tmp_path, monkeypatch):
-    skill = _library(tmp_path, monkeypatch)
-    pending = _pending(skill)
-    pending["evidence"]["execution"] = {
-        "schema_version": "carn/replay-verification/v1",
-        "expected_bundle_digest": "a" * 64,
-        "report": {
-            "ok": True,
-            "reason": "verified",
-            "bundle_digest": "a" * 64,
-            "result": {"status": "ok"},
-            "divergence": None,
-        },
-    }
-    P.save_pending("pdf", pending)
-
-    P.approve_pending("pdf")
-
-    assert "new body" in (skill / "SKILL.md").read_text()
-
-
 def test_promote_refuses_stale_champion_revision(tmp_path, monkeypatch):
     skill = _library(tmp_path, monkeypatch)
     pending = _pending(skill)

@@ -1,12 +1,6 @@
 import json
 
-from optimize.evidence import (
-    build_carn_execution_evidence,
-    build_evidence,
-    first_divergence,
-    render_markdown,
-    write_evidence,
-)
+from optimize.evidence import build_evidence, first_divergence, render_markdown, write_evidence
 
 
 SUMMARY = {
@@ -48,27 +42,6 @@ def test_build_evidence_attributes_revisions_and_per_case_deltas():
     assert evidence["cases"][0]["score_delta"] == 0.5
     assert evidence["cases"][0]["first_divergence"]["index"] == 1
     assert evidence["gate"]["promotable"] is True
-
-
-def test_build_evidence_carries_carn_execution_verification():
-    execution = build_carn_execution_evidence(
-        {
-            "ok": True,
-            "reason": "verified",
-            "bundle_digest": "a" * 64,
-            "result": {"status": "ok"},
-            "divergence": None,
-        },
-        "a" * 64,
-    )
-    evidence = build_evidence(
-        {**SUMMARY, "execution": execution},
-        "champ-rev",
-        "chall-rev",
-    )
-
-    assert evidence["execution"] == execution
-    assert "CARN replay: verified" in render_markdown(evidence)
 
 
 def test_write_evidence_emits_json_and_deterministic_report(tmp_path):

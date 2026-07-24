@@ -46,12 +46,6 @@ paths:
 10. **Human decisions stay attributable.** Password and OIDC deployments surface the signed-in
     user. Open mode has no signed-in identity. Rejection requires confirmation and can store an
     optional reason in the metadata-only audit.
-11. **CARN replay evidence fails closed when attached.** A behavioral run may add an `execution`
-    section with schema `carn/replay-verification/v1`, the caller's trusted bundle digest, and
-    CARN's `VerificationReport.to_dict()` output. Promotion requires `ok=true`,
-    `reason=verified`, no divergence, a structured result, and an observed bundle digest equal to
-    the trusted digest. Malformed or failed attached replay evidence blocks approval. Runs without
-    this optional section retain the existing behavioral gate.
 
 ```
 [ab] champion 0.55 vs challenger 0.60 -> CHALLENGER WINS

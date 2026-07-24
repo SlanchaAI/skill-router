@@ -268,3 +268,10 @@ def test_body_change_reuses_description_vector_and_reembeds_content(monkeypatch)
     assert len(embedder.document_calls) == 3
     assert "Instructions:" in embedder.document_calls[1][0]
     assert "CrashLoopBackOff" in embedder.document_calls[2][0]
+
+
+@pytest.mark.parametrize("value", ["0", "4001", "invalid"])
+def test_body_projection_bound_fails_closed(monkeypatch, value):
+    monkeypatch.setenv("ROUTER_BODY_CHARS", value)
+    with pytest.raises(ValueError, match="integer from 1 to 4000"):
+        Router([])

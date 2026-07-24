@@ -47,11 +47,11 @@ class Router:
     def __init__(self, skills: list[Skill]):
         self.skills = skills
         try:
-            self._body_chars = int(os.environ.get("ROUTER_BODY_CHARS", "16000"))
+            self._body_chars = int(os.environ.get("ROUTER_BODY_CHARS", "1000"))
         except ValueError as exc:
-            raise ValueError("ROUTER_BODY_CHARS must be a positive integer") from exc
-        if self._body_chars <= 0:
-            raise ValueError("ROUTER_BODY_CHARS must be a positive integer")
+            raise ValueError("ROUTER_BODY_CHARS must be an integer from 1 to 4000") from exc
+        if not 1 <= self._body_chars <= 4000:
+            raise ValueError("ROUTER_BODY_CHARS must be an integer from 1 to 4000")
         if not skills:  # empty library, don't normalize an empty matrix
             self._embed = None
             self._mat = np.zeros((0, 0), dtype=np.float32)
